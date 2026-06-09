@@ -123,20 +123,22 @@ export async function clearInventoryAllocation(
   admin: AdminSupabaseClient,
   printTicketId: string
 ): Promise<void> {
-  await admin
+  const { error } = await admin
     .from("print_tickets")
     .update({ allocated_ticket_id: null, allocated_at: null })
     .eq("id", printTicketId);
+  if (error) throw new Error(error.message);
 }
 
 export async function clearInventoryAllocationForTicket(
   admin: AdminSupabaseClient,
   ticketId: string
 ): Promise<void> {
-  await admin
+  const { error } = await admin
     .from("print_tickets")
     .update({ allocated_ticket_id: null, allocated_at: null })
     .eq("allocated_ticket_id", ticketId);
+  if (error) throw new Error(error.message);
 }
 
 /**

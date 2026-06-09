@@ -4,6 +4,14 @@ Changelog of app updates and edited files. Update this file whenever you edit pr
 
 ---
 
+## 2026-06-09 – Propagate errors from inventory allocation clear helpers
+
+- `lib/ticket-inventory/allocate.ts` – `clearInventoryAllocationForTicket` and `clearInventoryAllocation` throw on Supabase update errors
+
+**Updates:** release-ticket fail-closed path now receives real DB failures from deallocation.
+
+---
+
 ## 2026-06-09 – Release ticket and apply-template guard tweaks
 
 - `lib/admin/release-ticket.ts` – fail closed when inventory deallocation fails before ticket delete
