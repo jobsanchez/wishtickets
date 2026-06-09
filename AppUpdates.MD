@@ -4,6 +4,14 @@ Changelog of app updates and edited files. Update this file whenever you edit pr
 
 ---
 
+## 2026-06-09 – CodeRabbit auth-audit configuration
+
+- `.coderabbit.yaml` (new) – assertive review profile and path instructions for auth/API/middleware/admissions
+
+**Updates:** Configures CodeRabbit to prioritize authentication and authorization checks across API routes, admin layouts, and session middleware.
+
+---
+
 ## 2026-06-09 – Admissions offline upload: chunked sync batches
 
 - `lib/admissions/offline-sync-client.ts` (new) – batch size constant, outbox→payload mapping, per-op success parsing

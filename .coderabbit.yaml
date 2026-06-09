@@ -1,0 +1,68 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "en-US"
+early_access: false
+reviews:
+  profile: "assertive"
+  high_level_summary: true
+  review_details: true
+  auto_review:
+    enabled: true
+    drafts: false
+  path_instructions:
+    - path: "lib/auth.ts"
+      instructions: |
+        Security-critical auth helpers. Flag any helper that returns boolean instead of throwing/redirecting
+        when callers forget to check. Verify role vs capability checks match product rules (super_admin,
+        admin, admissions_staff, capability grants). Ensure no path trusts client-supplied user ids.
+
+    - path: "lib/require-event-section.ts"
+      instructions: |
+        Event-scoped authorization via RPC `is_authorized_for_event_section`. Every admin event API must
+        call forbiddenUnlessEventSection or forbiddenUnlessAnyEventSection before reads/writes. Flag missing
+        checks, wrong section id, or eventId taken from request without validating access to that event.
+
+    - path: "lib/supabase/middleware.ts"
+      instructions: |
+        Edge session gate. Verify protected route prefixes are complete (/dashboard, /admin, etc.), that
+        admissions routes stay intentionally public, and that skipping getUser for guests cannot bypass
+        protection on auth-required paths.
+
+    - path: "middleware.ts"
+      instructions: |
+        Confirm matcher covers all sensitive app routes and delegates to updateSession correctly.
+
+    - path: "app/api/**"
+      instructions: |
+        AUTH AUDIT (highest priority): For every route handler, verify authentication and authorization
+        before any DB write or sensitive read. Patterns in this repo:
+        - `requireAdmin`, `requireSuperAdmin`, `requireCapability`, `requireAnyCapability`,
+          `requireSuperAdminOrCapability`, `canAccessTicketResendAdminTools`
+        - `forbiddenUnlessEventSection` / `forbiddenUnlessAnyEventSection` for event-scoped admin APIs
+        - `supabase.auth.getUser()` then explicit 401/403
+        - Cron/webhook routes: shared secret or signature verification
+        - Public buyer/checkout routes: intentional; still check booking ownership where applicable
+        Flag: missing auth, auth only in layout but not API, IDOR (accessing another user's booking/event),
+        `getAdminClientIfAvailable()` without prior user auth gate, debug routes exposed in production.
+
+    - path: "app/api/admissions/**"
+      instructions: |
+        Code-based admissions auth (not Supabase login). Verify validate-code/session/sync/scan routes
+        validate admissions codes, event binding, and session cookies; no privilege escalation to admin data.
+
+    - path: "app/api/auth/**"
+      instructions: |
+        Login/logout/session endpoints. Check rate limiting assumptions, generic error messages, cookie
+        options, and that clear-session cannot be abused to log out arbitrary users.
+
+    - path: "app/admin/**"
+      instructions: |
+        Server layouts should gate admin UI; flag pages that skip layout checks or expose actions without
+        matching API authorization.
+
+    - path: "components/providers/session-guard-provider.tsx"
+      instructions: |
+        Client session polling and force_logout. Verify cannot be bypassed for protected UX and aligns
+        with /api/session/state behavior.
+
+chat:
+  auto_reply: true
