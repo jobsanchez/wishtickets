@@ -1,0 +1,57 @@
+---
+description: Use floating progress bar for loading and saving states that block the UI
+alwaysApply: true
+---
+
+# Floating Progress Bar Rule
+
+Whenever a page or component has **loading** or **saving** that blocks user interaction, use the `FloatingProgressBar` component from `@/components/ui/floating-progress`.
+
+## Layout pattern (three tiers)
+
+Match real operations with clear hierarchy:
+
+1. **`message`** — Short, action-oriented **title** (e.g. “Releasing seats”, “Saving changes”).
+2. **`subtitle`** — One **muted** line of context (entity name, counts, page scope).
+3. **`detail`** — **Body** copy in normal foreground: what is happening and what the user should do (e.g. keep tab open, expect ZIP cleanup).
+
+Avoid stuffing everything into one muted `subMessage` unless migrating legacy code.
+
+## API
+
+- `active` — show overlay when true.
+- `message`, `subtitle`, `detail` — preferred.
+- `subMessage` — **legacy** only: single muted block when `subtitle` and `detail` are both unset.
+- `percent` — optional determinate 0–100.
+- `footer` — optional actions (e.g. cancel send).
+
+## Presets
+
+Spread [`FLOATING_PROGRESS_PRESETS`](components/ui/floating-progress.tsx) for common cases:
+
+- `genericSave` — saving forms / settings.
+- `genericLoad` — initial data load for a screen.
+- `navigation` — client route transition (see `NavButtonWithProgress`).
+- `deleting` — destructive deletes.
+- `uploading` — file uploads.
+
+Override `message` after the spread when the title should be more specific, e.g.
+
+```tsx
+<FloatingProgressBar active={loading} {...FLOATING_PROGRESS_PRESETS.genericLoad} message="Loading seating…" />
+```
+
+## Multi-state overlays
+
+When one overlay is driven by several booleans (`saving || uploading || …`), use `useMemo` (or an equivalent branch) to pick **one** `{ message, subtitle, detail }` that reflects the **currently running** operation — never a generic “Saving…” while an upload is in progress.
+
+## Example
+
+```tsx
+import {
+  FLOATING_PROGRESS_PRESETS,
+  FloatingProgressBar,
+} from "@/components/ui/floating-progress";
+
+<FloatingProgressBar active={saving} {...FLOATING_PROGRESS_PRESETS.genericSave} />;
+```

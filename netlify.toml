@@ -1,0 +1,35 @@
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  # Next.js image optimizer often 502s on Netlify; next.config.ts disables it when NETLIFY=true (auto-set).
+  # To force the same locally: NEXT_IMAGE_UNOPTIMIZED=1 npm run build
+  #
+  # `/api/events/:id/availability`: On Netlify (SITE_ID) each RPC waits ~7.5s (`NETLIFY_AVAILABILITY_RPC_TIMEOUT_MS`).
+  # Book loads manifest + chunked seats (smaller payloads per Lambda). Optional timeout override above.
+  # Secrets scanning: omit known public/safe values (add in Netlify UI if needed)
+  SECRETS_SCAN_OMIT_KEYS = "NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_ANON_KEY,SMTP_USER,SMTP_PASS,SMTP_FROM,SUPABASE_SERVICE_ROLE_KEY"
+  SECRETS_SCAN_SMART_DETECTION_OMIT_VALUES = "wishticketsportal@gmail.com"
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+# ISR for `/` is `revalidate = 300` in app/page.tsx. The Next runtime + Netlify adapter emit
+# `x-nextjs-stale-time: 300` on prerendered HTML; `Cache-Control: public,max-age=0,must-revalidate`
+# is normal for ISR (browser revalidates; edge may serve stale). Verify with:
+#   SHOW_HEADERS=1 npm run ttfb -- https://your-domain/
+# Preview deploys can still show multi-second first-byte latency after idle (cold serverless);
+# compare production vs `--hash--.netlify.app` when interpreting Lighthouse TTFB.
+
+[[headers]]
+  for = "/concert-bg.webp"
+  [headers.values]
+    Cache-Control = "public, max-age=604800, stale-while-revalidate=86400"
+
+[[headers]]
+  for = "/concert-bg-sm.webp"
+  [headers.values]
+    Cache-Control = "public, max-age=604800, stale-while-revalidate=86400"
+
+[functions]
+  directory = "netlify/functions"

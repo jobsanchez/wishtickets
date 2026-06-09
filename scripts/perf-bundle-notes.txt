@@ -1,0 +1,8 @@
+Bundle notes (npm run build / npm run analyze)
+
+Buyer funnel (representative Next route table sizes, sample build):
+  /[eventSlug]          ~6.5 kB route JS, ~123 kB First Load JS (react-photo-view idle-loaded)
+  /[eventSlug]/book     ~14 kB route JS, ~208 kB First Load JS (SeatSelector code-split + skeleton)
+  /[eventSlug]/checkout ~7.8 kB route, ~147 kB First Load JS
+
+Analyzer: ANALYZE=true npm run build opens interactive treemap (see @next/bundle-analyzer).

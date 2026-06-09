@@ -1,0 +1,17 @@
+---
+description: Always update AppUpdates.MD when editing project files
+alwaysApply: true
+---
+
+# App Updates Rule
+
+When you create, edit, or delete project files (excluding node_modules, .next, .cursor, etc.), append an entry to `AppUpdates.MD` at the top of the Changelog section (below the "Changelog (ongoing)" header).
+
+**Format:**
+- `## YYYY-MM-DD – Brief title`
+- Bullet list of edited files
+- Optional: **Updates:** one-line summary
+
+Do this as the final step before completing your response.
+
+**Skip** when the only change was adding or editing `AppUpdates.MD` or this rule file (to avoid recursive updates).

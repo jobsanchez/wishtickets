@@ -1,0 +1,12 @@
+Perf baseline (lab, Apr 2026) — re-run: ./scripts/measure-ttfb-matrix.sh <eventSlug>
+Optional Lighthouse mobile:
+  npx lighthouse "<BASE>/<slug>" --only-categories=performance --form-factor=mobile --quiet --output=json
+
+Sample (wishtickets.net, warm-ish):
+  /                          TTFB ~0.36s  http 200
+  /login                     TTFB ~2.78s  http 200  (middleware + SSR)
+  /<slug>                    TTFB ~0.39–0.54s  http 200
+  /<slug>/book               TTFB ~0.46s  http 200
+
+Lighthouse mobile (wishdate-rewrite-dagupan sample):
+  LCP ~2090ms  FCP ~1220ms  TBT ~38ms  Speed Index ~4215
