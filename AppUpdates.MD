@@ -4,6 +4,14 @@ Changelog of app updates and edited files. Update this file whenever you edit pr
 
 ---
 
+## 2026-06-09 – CodeRabbit auth path instruction clarity
+
+- `.coderabbit.yaml` – lib/auth.ts instruction now flags both boolean-return helpers and unchecked call sites
+
+**Updates:** CodeRabbit review follow-up on auth-audit config wording.
+
+---
+
 ## 2026-06-09 – CodeRabbit auth-audit configuration
 
 - `.coderabbit.yaml` (new) – assertive review profile and path instructions for auth/API/middleware/admissions

@@ -11,8 +11,9 @@ reviews:
   path_instructions:
     - path: "lib/auth.ts"
       instructions: |
-        Security-critical auth helpers. Flag any helper that returns boolean instead of throwing/redirecting
-        when callers forget to check. Verify role vs capability checks match product rules (super_admin,
+        Security-critical auth helpers. Flag helpers that return boolean instead of throwing/redirecting
+        (insecure-by-default pattern) and also flag call sites that do not check those boolean returns.
+        Verify role vs capability checks match product rules (super_admin,
         admin, admissions_staff, capability grants). Ensure no path trusts client-supplied user ids.
 
     - path: "lib/require-event-section.ts"
