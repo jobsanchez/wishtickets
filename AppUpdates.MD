@@ -4,6 +4,16 @@ Changelog of app updates and edited files. Update this file whenever you edit pr
 
 ---
 
+## 2026-06-09 – Remove accidental repo files
+
+- `.gitignore` – ignore `Archive.zip` and `Untitled`
+- `Archive.zip` – deleted
+- `Untitled` – deleted
+
+**Updates:** Dropped stray archive and scratch file from the repository and gitignore them going forward.
+
+---
+
 ## 2026-05-30 – Admitted tickets drilldown: Group → Section → table
 
 - `components/admin/reports/kpi-detail-modal.tsx` – remove admission-code accordion level; show admission code per row after Category; group row shows name only (no “GROUP” label).

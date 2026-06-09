@@ -28,6 +28,8 @@ public/workbox*
 # misc
 .DS_Store
 *.pem
+Archive.zip
+Untitled
 
 # debug
 npm-debug.log*
