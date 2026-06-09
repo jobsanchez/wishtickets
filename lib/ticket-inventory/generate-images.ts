@@ -71,8 +71,19 @@ export async function generateInventoryImages(
         sectionSlotIndex: slot,
       });
       if (url) {
-        await admin.from("print_tickets").update({ ticket_image_url: url }).eq("id", pt.id);
-        images_generated += 1;
+        const { error: updateError } = await admin
+          .from("print_tickets")
+          .update({ ticket_image_url: url })
+          .eq("id", pt.id);
+        if (updateError) {
+          console.error("[generateInventoryImages] print_tickets update failed:", {
+            printTicketId: pt.id,
+            error: updateError.message,
+          });
+          failed += 1;
+        } else {
+          images_generated += 1;
+        }
       } else {
         failed += 1;
       }

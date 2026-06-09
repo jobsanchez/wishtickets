@@ -4,6 +4,20 @@ Changelog of app updates and edited files. Update this file whenever you edit pr
 
 ---
 
+## 2026-06-09 – Ticket inventory review fixes
+
+- `app/api/admin/events/[id]/seating/apply-template/route.ts` – fail closed when inventory guard cannot run
+- `lib/ticket-inventory/allocate.ts` – optional encrypted_qr; rollback partial allocations on failure
+- `lib/ticket-inventory/ensure-inventory.ts` – batch backfill event_seats.encrypted_qr before inserts
+- `lib/ticket-inventory/generate-images.ts` – check print_tickets update errors
+- `lib/ticket-inventory/summary.ts`, `delete-inventory.ts`, `build-sale-ticket.ts` – query/count fixes
+- `components/admin/seat-configurator.tsx` – useMemo deps for ticket progress overlay
+- `lib/admin/release-ticket.ts`, `lib/print-tickets/generate.ts` – minor cleanups
+
+**Updates:** Hardens inventory safety checks and avoids wrong encrypted_qr fallback / stale progress UI.
+
+---
+
 ## 2026-06-09 – Seat Configurator: Delete generated tickets
 
 - `lib/ticket-inventory/delete-inventory.ts` – remove unallocated `print_tickets` + storage PNGs per section

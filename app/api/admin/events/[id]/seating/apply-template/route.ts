@@ -1,5 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { createAdminClient, getAdminClientIfAvailable } from "@/lib/supabase/admin";
 import { forbiddenUnlessAnyEventSection } from "@/lib/require-event-section";
 import { sectionHasAllocatedInventory } from "@/lib/ticket-inventory";
 import { NextRequest, NextResponse } from "next/server";
@@ -131,6 +131,15 @@ export async function POST(
   }
 
   if (hasExisting && confirm) {
+    if (!getAdminClientIfAvailable()) {
+      return NextResponse.json(
+        {
+          error:
+            "Cannot verify ticket inventory safety: SUPABASE_SERVICE_ROLE_KEY is not configured.",
+        },
+        { status: 503 }
+      );
+    }
     try {
       const admin = createAdminClient();
       const { data: sectionRows } = await admin
@@ -149,7 +158,14 @@ export async function POST(
         );
       }
     } catch (e) {
-      console.warn("[apply-template] inventory guard check failed:", e);
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("[apply-template] inventory guard check failed:", e);
+      return NextResponse.json(
+        {
+          error: `Cannot apply template: ticket inventory safety check failed (${msg}).`,
+        },
+        { status: 500 }
+      );
     }
   }
 

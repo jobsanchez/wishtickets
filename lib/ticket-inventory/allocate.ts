@@ -13,10 +13,11 @@ function rowToAllocateResult(row: {
   event_seat_id: string | null;
   event_section_id: string;
 }): AllocateInventoryResult {
+  const encrypted = row.encrypted_qr?.trim();
   return {
     print_ticket_id: row.id,
     qr_data: row.qr_data,
-    encrypted_qr: (row.encrypted_qr ?? row.qr_data).trim(),
+    ...(encrypted && encrypted.length > 0 ? { encrypted_qr: encrypted } : {}),
     ticket_image_url: row.ticket_image_url,
     event_seat_id: row.event_seat_id,
     event_section_id: row.event_section_id,
@@ -145,24 +146,40 @@ export async function finalizeInventoryAllocationsForSaleTickets(
   admin: AdminSupabaseClient,
   rows: Array<{ id: string; print_ticket_id?: string | null; ticket_image_url?: string | null }>
 ): Promise<void> {
-  for (const row of rows) {
-    const printTicketId = row.print_ticket_id?.trim();
-    if (!printTicketId) continue;
-    await markInventoryAllocated(admin, printTicketId, row.id);
+  const allocatedPrintIds: string[] = [];
+  try {
+    for (const row of rows) {
+      const printTicketId = row.print_ticket_id?.trim();
+      if (!printTicketId) continue;
+      await markInventoryAllocated(admin, printTicketId, row.id);
+      allocatedPrintIds.push(printTicketId);
 
-    const hasImage =
-      typeof row.ticket_image_url === "string" && row.ticket_image_url.trim().length > 0;
-    if (hasImage) continue;
+      const hasImage =
+        typeof row.ticket_image_url === "string" && row.ticket_image_url.trim().length > 0;
+      if (hasImage) continue;
 
-    const { data: inv } = await admin
-      .from("print_tickets")
-      .select("ticket_image_url")
-      .eq("id", printTicketId)
-      .maybeSingle();
-    const invUrl = (inv?.ticket_image_url as string | null)?.trim();
-    if (invUrl) {
-      await admin.from("tickets").update({ ticket_image_url: invUrl }).eq("id", row.id);
+      const { data: inv } = await admin
+        .from("print_tickets")
+        .select("ticket_image_url")
+        .eq("id", printTicketId)
+        .maybeSingle();
+      const invUrl = (inv?.ticket_image_url as string | null)?.trim();
+      if (invUrl) {
+        await admin.from("tickets").update({ ticket_image_url: invUrl }).eq("id", row.id);
+      }
     }
+  } catch (e) {
+    for (const printTicketId of allocatedPrintIds) {
+      try {
+        await clearInventoryAllocation(admin, printTicketId);
+      } catch (rollbackErr) {
+        console.error("[finalizeInventoryAllocationsForSaleTickets] rollback failed:", {
+          printTicketId,
+          rollbackErr,
+        });
+      }
+    }
+    throw e;
   }
 }
 

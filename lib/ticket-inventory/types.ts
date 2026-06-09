@@ -28,7 +28,8 @@ export type EnsureInventoryResult = {
 export type AllocateInventoryResult = {
   print_ticket_id: string;
   qr_data: string;
-  encrypted_qr: string;
+  /** Set only when print_tickets.encrypted_qr is present; derive from qr_data otherwise. */
+  encrypted_qr?: string;
   ticket_image_url: string | null;
   event_seat_id: string | null;
   event_section_id: string;

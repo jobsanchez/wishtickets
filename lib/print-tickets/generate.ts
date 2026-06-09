@@ -169,7 +169,7 @@ export async function generateOne(
 
     const slotForRow = Math.max(1, Math.floor(sectionSlotIndex ?? 1));
 
-    let existingQuery = admin
+    const existingQuery = admin
       .from("print_tickets")
       .select("id, qr_data, encrypted_qr")
       .eq("event_id", eventId)

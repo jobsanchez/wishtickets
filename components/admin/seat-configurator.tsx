@@ -1501,6 +1501,9 @@ export function SeatConfigurator({ eventId, venueId, venueName = "", initialSeat
     seatMapSaving,
     saveTemplateSaving,
     applyTemplateSaving,
+    generatingTickets,
+    deletingTickets,
+    ticketGenProgress,
   ]);
 
   if (loading) {

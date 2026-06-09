@@ -31,16 +31,28 @@ export async function getEventInventorySummaries(
 
   const seatsCountBySection = new Map<string, number>();
   for (const sectionId of uniqueSectionIds) {
-    const { count, error } = await admin
+    seatsCountBySection.set(sectionId, 0);
+  }
+  let seatFrom = 0;
+  for (;;) {
+    const { data: seatRows, error: seatErr } = await admin
       .from("event_seats")
-      .select("id", { count: "exact", head: true })
+      .select("event_section_id")
       .eq("event_id", eventId)
-      .eq("event_section_id", sectionId);
-    if (!error && count != null) {
-      seatsCountBySection.set(sectionId, count);
-      const row = out.get(sectionId);
-      if (row) row.seats_count = count;
+      .in("event_section_id", uniqueSectionIds)
+      .range(seatFrom, seatFrom + PAGE - 1);
+    if (seatErr) throw new Error(seatErr.message);
+    const seatChunk = seatRows ?? [];
+    for (const seat of seatChunk) {
+      const sid = seat.event_section_id as string;
+      seatsCountBySection.set(sid, (seatsCountBySection.get(sid) ?? 0) + 1);
     }
+    if (seatChunk.length < PAGE) break;
+    seatFrom += PAGE;
+  }
+  for (const [sectionId, count] of seatsCountBySection) {
+    const row = out.get(sectionId);
+    if (row) row.seats_count = count;
   }
 
   let from = 0;

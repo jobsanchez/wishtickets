@@ -90,7 +90,7 @@ export async function deleteInventoryForSections(
     const { data, error } = await admin.storage.from(TICKET_IMAGES_BUCKET).remove(chunk);
     if (error) throw new Error(error.message);
     const reported = Array.isArray(data) ? data.length : 0;
-    storage_removed += reported > 0 ? reported : chunk.length;
+    storage_removed += reported;
   }
 
   return {

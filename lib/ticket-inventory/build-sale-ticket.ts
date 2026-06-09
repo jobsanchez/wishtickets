@@ -58,7 +58,8 @@ export async function buildSeatSaleTicket(
       section_id: null,
       quantity: 1,
       qr_data: inventory.qr_data,
-      encrypted_qr: inventory.encrypted_qr,
+      encrypted_qr:
+        inventory.encrypted_qr ?? buildEncryptedQrFromQrData(inventory.qr_data),
       qr_image_url: null,
       ticket_image_url: inventory.ticket_image_url,
       print_ticket_id: inventory.print_ticket_id,
@@ -145,7 +146,8 @@ export async function buildSectionSaleTicket(
       section_id: inventory.event_seat_id ? null : opts.sectionId,
       quantity: 1,
       qr_data: inventory.qr_data,
-      encrypted_qr: inventory.encrypted_qr,
+      encrypted_qr:
+        inventory.encrypted_qr ?? buildEncryptedQrFromQrData(inventory.qr_data),
       qr_image_url: null,
       ticket_image_url: inventory.ticket_image_url,
       print_ticket_id: inventory.print_ticket_id,

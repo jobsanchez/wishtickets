@@ -27,7 +27,7 @@ export async function releaseConfirmedTicket(
 ): Promise<{ seatStatus: "available" | "reserved" }> {
   const { data: ticket, error: ticketError } = await supabase
     .from("tickets")
-    .select("id, booking_id, seat_id, section_id, quantity, print_ticket_id")
+    .select("id, booking_id, seat_id, section_id, quantity")
     .eq("id", ticketId)
     .single();
 

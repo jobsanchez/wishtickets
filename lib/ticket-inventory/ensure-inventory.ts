@@ -1,7 +1,7 @@
 import type { SupabaseClient as AdminSupabaseClient } from "@supabase/supabase-js";
 import {
   canonicalQrDataForSeat,
-  ensureSeatEncryptedQrForSale,
+  deterministicEncryptedQrForNewSeat,
 } from "@/lib/event-seats/seat-encrypted-qr";
 import type { EnsureInventoryResult } from "@/lib/ticket-inventory/types";
 
@@ -94,6 +94,37 @@ export async function ensureInventoryForSeats(
   let skipped_allocated = 0;
   const print_ticket_ids: string[] = [];
 
+  const encryptedQrBySeatId = new Map<string, string>();
+  const seatsNeedingQrBackfill: Array<{ id: string; encrypted_qr: string }> = [];
+  for (const seat of seats) {
+    const sectionCode = sectionCodeById.get(seat.event_section_id) ?? "000";
+    const ctx = {
+      eventCode,
+      sectionCode,
+      rowLabel: seat.row_label ?? "-",
+      seatNumber: seat.seat_number ?? "-",
+    };
+    const existingEnc = (seat.encrypted_qr ?? "").trim();
+    if (existingEnc.length > 0) {
+      encryptedQrBySeatId.set(seat.id, existingEnc.toUpperCase());
+      continue;
+    }
+    const enc = deterministicEncryptedQrForNewSeat(ctx);
+    encryptedQrBySeatId.set(seat.id, enc);
+    seatsNeedingQrBackfill.push({ id: seat.id, encrypted_qr: enc });
+  }
+
+  for (let i = 0; i < seatsNeedingQrBackfill.length; i += SEAT_CHUNK) {
+    const chunk = seatsNeedingQrBackfill.slice(i, i + SEAT_CHUNK);
+    const results = await Promise.all(
+      chunk.map(({ id, encrypted_qr }) =>
+        admin.from("event_seats").update({ encrypted_qr }).eq("id", id)
+      )
+    );
+    const failed = results.find((r) => r.error);
+    if (failed?.error) throw new Error(failed.error.message);
+  }
+
   for (const seat of seats) {
     const prev = existingBySeatId.get(seat.id);
     if (prev) {
@@ -111,10 +142,7 @@ export async function ensureInventoryForSeats(
       seatNumber: seat.seat_number ?? "-",
     };
     const qrData = canonicalQrDataForSeat(ctx);
-    const encryptedQr =
-      (seat.encrypted_qr ?? "").trim().length > 0
-        ? seat.encrypted_qr!.trim().toUpperCase()
-        : await ensureSeatEncryptedQrForSale(admin, seat.id, ctx);
+    const encryptedQr = encryptedQrBySeatId.get(seat.id)!;
 
     const { data: inserted, error: insertError } = await admin
       .from("print_tickets")
