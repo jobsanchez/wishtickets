@@ -4,6 +4,23 @@ Changelog of app updates and edited files. Update this file whenever you edit pr
 
 ---
 
+## 2026-06-09 – Admissions offline upload: chunked sync batches
+
+- `lib/admissions/offline-sync-client.ts` (new) – batch size constant, outbox→payload mapping, per-op success parsing
+- `app/admissions/scan/page.tsx` – `syncOutbox` loops in batches of 50 with overall progress; partial batch failures keep remaining ops for retry
+
+**Updates:** Large offline scan queues no longer upload in one POST (timeout risk on Netlify); each batch syncs independently and successful ops are removed before the next batch.
+
+---
+
+## 2026-06-09 – Fix send-tickets button contrast in light mode
+
+- `app/[eventSlug]/confirmation/[bookingId]/send-tickets-button.tsx` – use `success` variant instead of `outline` so light-mode outline styles no longer override the green background
+
+**Updates:** “Send tickets to email” is readable on the booking confirmation hero in light mode.
+
+---
+
 ## 2026-06-09 – Propagate errors from inventory allocation clear helpers
 
 - `lib/ticket-inventory/allocate.ts` – `clearInventoryAllocationForTicket` and `clearInventoryAllocation` throw on Supabase update errors

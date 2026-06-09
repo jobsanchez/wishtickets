@@ -24,9 +24,14 @@ import {
   resolvePackTicket,
 } from "@/lib/admissions/offline-client";
 import {
+  OFFLINE_SYNC_BATCH_SIZE,
+  okIdsFromSyncResults,
+  outboxOpsToSyncPayload,
+  type SyncResultRow,
+} from "@/lib/admissions/offline-sync-client";
+import {
   idbAddOutbox,
   idbClearAdmissionsData,
-  idbClearOutbox,
   idbGetPack,
   idbListOutbox,
   idbRemoveOutboxIds,
@@ -286,7 +291,7 @@ export default function AdmissionsScanPage() {
         active: true as const,
         message: "Uploading offline admissions",
         subtitle: session.event_title,
-        detail: "Sending queued scans to the server. Keep this tab open until this finishes.",
+        detail: `Sending queued scans in batches of ${OFFLINE_SYNC_BATCH_SIZE}. Keep this tab open until this finishes.`,
         percent: syncComputable ? syncProgress : undefined,
       };
     }
@@ -445,73 +450,81 @@ export default function AdmissionsScanPage() {
 
   const syncOutbox = useCallback(async () => {
     if (!session) return;
-    const out = await idbListOutbox();
-    if (out.length === 0) {
+    let remaining = await idbListOutbox();
+    if (remaining.length === 0) {
       setPendingOutboxCount(0);
       await fetchRecords();
       return;
     }
+    const totalAtStart = remaining.length;
+    let batchFailed = false;
+    let batchErrorMessage: string | null = null;
+
     setSyncBusy(true);
     setSyncProgress(0);
     setSyncComputable(false);
     try {
-      const payload = {
-        ops: out.map((o) =>
-          o.mode === "release_add_on"
-            ? {
-                id: o.id,
-                mode: o.mode,
-                booking_add_on_id: o.booking_add_on_id,
-                release_quantity: o.release_quantity,
-                event_id: session.event_id,
-              }
-            : { id: o.id, qr_data: o.qr_data, mode: o.mode }
-        ),
-      };
-      const { ok, data: j } = await postJsonWithUploadProgress<{ ok?: boolean; error?: string }>(
-        "/api/admissions/sync",
-        payload,
-        setSyncProgress,
-        setSyncComputable
-      );
-      if (!ok) {
-        setOfflineBanner({
-          tone: "error",
-          message: (j as { error?: string }).error ?? "Sync failed",
-        });
-        return;
-      }
-      const syncResults = (
-        j as {
-          results?: Array<{
-            id?: string;
-            httpStatus?: number;
-            body?: { ok?: boolean; deduped?: boolean };
-          }>;
+      while (remaining.length > 0) {
+        const opsDoneBeforeBatch = totalAtStart - remaining.length;
+        const batch = remaining.slice(0, OFFLINE_SYNC_BATCH_SIZE);
+        const payload = { ops: outboxOpsToSyncPayload(batch, session.event_id) };
+        const batchSize = batch.length;
+
+        const { ok, data: j } = await postJsonWithUploadProgress<{
+          ok?: boolean;
+          error?: string;
+          results?: SyncResultRow[];
+        }>(
+          "/api/admissions/sync",
+          payload,
+          (batchPercent) => {
+            setSyncComputable(true);
+            const completedInBatch = (batchPercent / 100) * batchSize;
+            const overall = Math.round(
+              ((opsDoneBeforeBatch + completedInBatch) / totalAtStart) * 100
+            );
+            setSyncProgress(Math.min(99, overall));
+          },
+          setSyncComputable
+        );
+
+        if (!ok) {
+          batchFailed = true;
+          batchErrorMessage = j.error ?? "Sync failed";
+          break;
         }
-      ).results;
-      const okIds = new Set<string>();
-      if (Array.isArray(syncResults)) {
-        for (const r of syncResults) {
-          const id = typeof r?.id === "string" ? r.id : null;
-          const httpStatus = typeof r?.httpStatus === "number" ? r.httpStatus : 0;
-          const body = r?.body ?? {};
-          const success =
-            body.deduped === true ||
-            (httpStatus >= 200 && httpStatus < 300 && body.ok !== false);
-          if (id && success) okIds.add(id);
+
+        const syncResults = (j as { results?: SyncResultRow[] }).results;
+        const okIds = okIdsFromSyncResults(syncResults);
+        if (okIds.size > 0) {
+          await idbRemoveOutboxIds(Array.from(okIds));
+        } else if (!Array.isArray(syncResults)) {
+          // Legacy sync responses without per-op results: drop only this batch.
+          await idbRemoveOutboxIds(batch.map((o) => o.id));
         }
+
+        remaining = await idbListOutbox();
+        setSyncProgress(
+          Math.min(99, Math.round(((totalAtStart - remaining.length) / totalAtStart) * 100))
+        );
       }
-      if (okIds.size > 0) {
-        await idbRemoveOutboxIds(Array.from(okIds));
-      } else if (!Array.isArray(syncResults)) {
-        // Backward-compatible fallback for older sync response shapes.
-        await idbClearOutbox();
-      }
-      const remainingOutbox = await idbListOutbox();
-      setPendingOutboxCount(remainingOutbox.length);
+
+      setPendingOutboxCount(remaining.length);
       setSyncProgress(100);
-      if (remainingOutbox.length === 0) {
+
+      if (batchFailed) {
+        if (remaining.length < totalAtStart) {
+          setOfflineBanner({
+            tone: "error",
+            message: `${batchErrorMessage ?? "Sync failed"} ${remaining.length} pending operation${remaining.length === 1 ? "" : "s"} remain — tap Upload to retry.`,
+          });
+        } else {
+          setOfflineBanner({
+            tone: "error",
+            message: batchErrorMessage ?? "Sync failed",
+          });
+        }
+      } else if (remaining.length === 0) {
         setOfflineBanner({
           tone: "success",
           message: "Offline admissions synced to the server.",
@@ -519,16 +532,22 @@ export default function AdmissionsScanPage() {
       } else {
         setOfflineBanner({
           tone: "error",
-          message: `Synced with partial failures. ${remainingOutbox.length} pending operation${remainingOutbox.length === 1 ? "" : "s"} remain and will retry.`,
+          message: `Synced with partial failures. ${remaining.length} pending operation${remaining.length === 1 ? "" : "s"} remain and will retry.`,
         });
       }
+
       await fetchRecords();
       const p = await idbGetPack();
       setIdbPack(p);
     } catch {
+      const left = await idbListOutbox();
+      setPendingOutboxCount(left.length);
       setOfflineBanner({
         tone: "error",
-        message: "Could not sync. Try again when online.",
+        message:
+          left.length < totalAtStart
+            ? `Upload interrupted. ${left.length} pending operation${left.length === 1 ? "" : "s"} remain — tap Upload to retry.`
+            : "Could not sync. Try again when online.",
       });
     } finally {
       setSyncBusy(false);
