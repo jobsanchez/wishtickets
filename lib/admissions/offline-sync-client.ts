@@ -17,21 +17,58 @@ export type SyncOpPayload =
       event_id: string;
     };
 
+export type OutboxSyncPartition = {
+  ops: SyncOpPayload[];
+  /** Malformed or stale outbox rows that cannot be sent to the API. */
+  invalidOpIds: string[];
+};
+
 export function outboxOpsToSyncPayload(
   ops: OfflinePendingOpV1[],
   eventId: string
-): SyncOpPayload[] {
-  return ops.map((o) =>
-    o.mode === "release_add_on"
-      ? {
+): OutboxSyncPartition {
+  const valid: SyncOpPayload[] = [];
+  const invalidOpIds: string[] = [];
+
+  for (const o of ops) {
+    if (!o.id) continue;
+
+    if (o.mode === "release_add_on") {
+      const bookingAddOnId = o.booking_add_on_id?.trim();
+      const releaseQty = o.release_quantity;
+      if (
+        bookingAddOnId &&
+        typeof releaseQty === "number" &&
+        Number.isInteger(releaseQty) &&
+        releaseQty >= 1
+      ) {
+        valid.push({
           id: o.id,
           mode: o.mode,
-          booking_add_on_id: o.booking_add_on_id!,
-          release_quantity: o.release_quantity!,
+          booking_add_on_id: bookingAddOnId,
+          release_quantity: releaseQty,
           event_id: eventId,
-        }
-      : { id: o.id, qr_data: o.qr_data!, mode: o.mode }
-  );
+        });
+      } else {
+        invalidOpIds.push(o.id);
+      }
+      continue;
+    }
+
+    if (o.mode === "admit" || o.mode === "re_entry") {
+      const qrData = o.qr_data?.trim();
+      if (qrData) {
+        valid.push({ id: o.id, qr_data: qrData, mode: o.mode });
+      } else {
+        invalidOpIds.push(o.id);
+      }
+      continue;
+    }
+
+    invalidOpIds.push(o.id);
+  }
+
+  return { ops: valid, invalidOpIds };
 }
 
 export type SyncResultRow = {

@@ -4,6 +4,16 @@ Changelog of app updates and edited files. Update this file whenever you edit pr
 
 ---
 
+## 2026-06-09 – Admissions offline sync hardening
+
+- `lib/admissions/offline-sync-client.ts` – validate outbox rows before mapping; quarantine invalid IDs
+- `lib/admissions/offline-sync-client.test.ts` (new)
+- `app/admissions/scan/page.tsx` – ref mutex prevents concurrent sync; exit loop when a batch returns zero successes
+
+**Updates:** Fixes duplicate in-flight uploads, infinite retry on all-failed batches, and malformed outbox rows breaking whole batches.
+
+---
+
 ## 2026-06-09 – Admissions offline upload: chunked sync batches
 
 - `lib/admissions/offline-sync-client.ts` (new) – batch size constant, outbox→payload mapping, per-op success parsing
