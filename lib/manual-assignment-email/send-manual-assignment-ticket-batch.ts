@@ -3,7 +3,7 @@ import { sendManualDistributionEmail } from "@/lib/send-manual-distribution-emai
 import { buildAssignedTicketsEmailSubject } from "@/lib/email/scoped-email-subject";
 import { formatEventDateTimeLong } from "@/lib/event-datetime";
 import type { ManualDistTicketRow } from "@/lib/manual-assignment-email/collect-next-booking-tickets-for-zip-budget";
-import { buildUniquePrintFolderDownloadItems } from "@/lib/print-tickets/folder-links";
+import { resolveManualAssignmentDownloadLinks } from "@/lib/manual-assignment-email/resolve-manual-assignment-download-links";
 import { chunkArray } from "@/lib/array-chunks";
 
 /** PostgREST URL limits: keep `.in(...)` batches small (same scale as other admin routes). */
@@ -151,11 +151,13 @@ export async function sendManualAssignmentTicketsOneEmail(
     orderedTicketIds,
     "id, ticket_image_url"
   );
-  const items = buildUniquePrintFolderDownloadItems(
-    assignment.event_id,
-    ticketsRaw.map((r) => (r.ticket_image_url as string | null | undefined) ?? "")
-      .filter((u): u is string => u.length > 0)
-  );
+  const items = await resolveManualAssignmentDownloadLinks(supabase, {
+    eventId: assignment.event_id,
+    bookingId: assignment.booking_id,
+    ticketImageUrls: ticketsRaw
+      .map((r) => (r.ticket_image_url as string | null | undefined) ?? "")
+      .filter((u): u is string => u.length > 0),
+  });
   return { sentTicketCount: orderedTicketIds.length, zipLinkCount: items.length };
 }
 
@@ -256,11 +258,14 @@ export async function sendManualAssignmentTicketBatch(
   const multiPart =
     multiPartDelivery === true || (typeof partsTotal === "number" && partsTotal > 1);
 
-  const items = buildUniquePrintFolderDownloadItems(
-    assignment.event_id as string,
-    ticketRows
-      .map((t) => t.ticket_image_url)
-      .filter((u): u is string => typeof u === "string" && u.length > 0)
+  const items = (
+    await resolveManualAssignmentDownloadLinks(supabase, {
+      eventId: assignment.event_id as string,
+      bookingId: assignment.booking_id,
+      ticketImageUrls: ticketRows
+        .map((t) => t.ticket_image_url)
+        .filter((u): u is string => typeof u === "string" && u.length > 0),
+    })
   ).map((x) => ({ url: x.url, label: x.label }));
   const bulkDownloadUrls = items.map((x) => x.url);
   const bulkDownloadLinkLabels = items.map((x) => x.label);

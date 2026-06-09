@@ -1,5 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { cleanupBookingIfEmpty } from "@/lib/admin/void-sale";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { clearInventoryAllocationForTicket } from "@/lib/ticket-inventory";
 
 const DEFAULT_PRICE_CENTS = 50000;
 
@@ -25,7 +27,7 @@ export async function releaseConfirmedTicket(
 ): Promise<{ seatStatus: "available" | "reserved" }> {
   const { data: ticket, error: ticketError } = await supabase
     .from("tickets")
-    .select("id, booking_id, seat_id, section_id, quantity")
+    .select("id, booking_id, seat_id, section_id, quantity, print_ticket_id")
     .eq("id", ticketId)
     .single();
 
@@ -55,6 +57,13 @@ export async function releaseConfirmedTicket(
     .select("id")
     .eq("booking_id", ticket.booking_id);
   const assignmentIds = (assignments ?? []).map((row) => row.id);
+
+  try {
+    const admin = createAdminClient();
+    await clearInventoryAllocationForTicket(admin, ticketId);
+  } catch (e) {
+    console.warn("[release-ticket] clear inventory allocation failed:", e);
+  }
 
   const { error: deleteError } = await supabase
     .from("tickets")

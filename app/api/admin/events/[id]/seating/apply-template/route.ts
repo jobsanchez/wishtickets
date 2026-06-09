@@ -1,5 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { forbiddenUnlessAnyEventSection } from "@/lib/require-event-section";
+import { sectionHasAllocatedInventory } from "@/lib/ticket-inventory";
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { randomUUID } from "crypto";
@@ -126,6 +128,29 @@ export async function POST(
       existing_section_count: existingSectionCount ?? 0,
       existing_seat_count: existingSeatCount ?? 0,
     });
+  }
+
+  if (hasExisting && confirm) {
+    try {
+      const admin = createAdminClient();
+      const { data: sectionRows } = await admin
+        .from("event_sections")
+        .select("id")
+        .eq("event_id", eventId);
+      const sectionIds = (sectionRows ?? []).map((s) => s.id as string);
+      const { hasAllocated } = await sectionHasAllocatedInventory(admin, eventId, sectionIds);
+      if (hasAllocated) {
+        return NextResponse.json(
+          {
+            error:
+              "Cannot apply template: sold ticket inventory exists for this event. Void those sales first.",
+          },
+          { status: 409 }
+        );
+      }
+    } catch (e) {
+      console.warn("[apply-template] inventory guard check failed:", e);
+    }
   }
 
   await supabase.from("event_prices").delete().eq("event_id", eventId);

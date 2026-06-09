@@ -1556,9 +1556,9 @@ export function PrintTicketsTab({ eventId }: PrintTicketsTabProps) {
         Generate ticket images for sections or seats without marking them sold. Send tickets via email for printing.
       </p>
       <p className="text-xs text-foreground-muted mb-4 max-w-3xl leading-relaxed">
-        Pre-print rows are stored as <code className="text-foreground/90">print_tickets</code> and are not the same
-        as purchaser tickets in <code className="text-foreground/90">tickets</code>. Admissions scanning only
-        validates buyer QR codes from bookings. Free/standing slot lists are capped by{" "}
+        Pre-print rows live in <code className="text-foreground/90">print_tickets</code> (generate from Seat
+        Configurator or top up here). Buyer sales allocate from that inventory when available. Free/standing slot
+        lists are capped by{" "}
         <code className="text-foreground/90">MAX_FREE_STANDING_PRINT_SLOTS</code> on the server (defaults to 2000 if
         unset).
       </p>

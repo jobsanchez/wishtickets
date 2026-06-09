@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { generateTicketImageForTicketId } from "@/lib/ticket-image";
+import { resolveTicketImageUrl } from "@/lib/ticket-inventory";
 import { runPool } from "@/lib/print-tickets/run-pool";
 import { MANUAL_CONFIRM_IMAGE_BATCH_SIZE } from "@/lib/manual-assignment-confirm/constants";
 import { BULK_PRINT_ZIP_MAX_TICKETS_PER_PART } from "@/lib/print-tickets/bulk-zip-email";
@@ -198,7 +199,7 @@ export async function generateNextManualAssignmentTicketImagesBatch(
 
   const { data: batch, error: batchErr } = await admin
     .from("tickets")
-    .select("id, seat_id, section_id")
+    .select("id, seat_id, section_id, print_ticket_id")
     .eq("booking_id", resolvedBookingId)
     .is("ticket_image_url", null)
     // `tickets` does not guarantee a created_at column across environments.
@@ -294,7 +295,12 @@ export async function generateNextManualAssignmentTicketImagesBatch(
     sectionSlotByTicketId.set(row.id, next);
   }
 
-  const rows = (batch ?? []) as Array<{ id: string; seat_id: string | null; section_id: string | null }>;
+  const rows = (batch ?? []) as Array<{
+    id: string;
+    seat_id: string | null;
+    section_id: string | null;
+    print_ticket_id?: string | null;
+  }>;
   if (rows.length === 0) {
     return {
       processed: 0,
@@ -329,7 +335,10 @@ export async function generateNextManualAssignmentTicketImagesBatch(
       sectionSlotIndex: sectionSlot,
     });
     const storagePath = `print-by-section/${eventSlug}/${sectionSlug}/part-${part}/${base}`;
-    const url = await generateTicketImageForTicketId(row.id, { storagePath });
+    let url = await resolveTicketImageUrl(admin, row, { generateIfMissing: true });
+    if (!url && !row.print_ticket_id) {
+      url = await generateTicketImageForTicketId(row.id, { storagePath });
+    }
     if (!url) {
       const { data: stillExists, error: existsErr } = await admin
         .from("tickets")

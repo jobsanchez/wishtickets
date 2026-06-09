@@ -153,6 +153,78 @@ export function buildFolderZipDownloadUrl(eventId: string, folderPath: string): 
   return u.toString();
 }
 
+const TICKET_IMAGE_OBJECT_PATH_RE = /\.(png|jpe?g)$/i;
+
+function isAllowedTicketImageObjectPath(objectPath: string): boolean {
+  const norm = normalizeStoragePath(objectPath);
+  if (!TICKET_IMAGE_OBJECT_PATH_RE.test(norm)) return false;
+  return (
+    norm.startsWith("print-bulk-folders/") ||
+    norm.startsWith("print-by-section/")
+  );
+}
+
+/** Unique storage object keys for ticket image URLs (preserves first-seen order). */
+export function resolveTicketImageObjectPaths(ticketImageUrls: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const url of ticketImageUrls) {
+    const path = resolveTicketImageStorageObjectPath(url);
+    if (!path || !isAllowedTicketImageObjectPath(path) || seen.has(path)) continue;
+    seen.add(path);
+    out.push(path);
+  }
+  return out;
+}
+
+/** ZIP download that includes only the listed storage objects (not an entire folder). */
+export function buildTicketFilesZipDownloadUrl(eventId: string, objectPaths: string[]): string {
+  const origin = getSiteOrigin();
+  const u = new URL("/api/print-ticket-folders/download-zip", origin);
+  u.searchParams.set("eventId", eventId);
+  for (const path of objectPaths) {
+    u.searchParams.append("files", path);
+  }
+  u.searchParams.set("expiresIn", String(getBulkZipSignedUrlSeconds()));
+  return u.toString();
+}
+
+/**
+ * Build ZIP links scoped to explicit ticket image files (manual distribution / partial section sales).
+ */
+export function buildTicketScopedDownloadItems(
+  eventId: string,
+  ticketImageUrls: string[],
+  opts?: { maxFilesPerZip?: number }
+): Array<{ url: string; label: string }> {
+  const maxFiles = Math.max(1, opts?.maxFilesPerZip ?? 250);
+  const paths = resolveTicketImageObjectPaths(ticketImageUrls);
+  if (paths.length === 0) return [];
+
+  const bySection = new Map<string, string[]>();
+  for (const path of paths) {
+    const sectionSlug = path.split("/").filter(Boolean)[2] ?? "section";
+    const list = bySection.get(sectionSlug) ?? [];
+    list.push(path);
+    bySection.set(sectionSlug, list);
+  }
+
+  const out: Array<{ url: string; label: string }> = [];
+  for (const [sectionSlug, sectionPaths] of bySection) {
+    const baseLabel = prettifySectionSlug(sectionSlug);
+    const needsParts = sectionPaths.length > maxFiles;
+    for (let i = 0; i < sectionPaths.length; i += maxFiles) {
+      const chunk = sectionPaths.slice(i, i + maxFiles);
+      const partIndex = Math.floor(i / maxFiles) + 1;
+      out.push({
+        url: buildTicketFilesZipDownloadUrl(eventId, chunk),
+        label: needsParts ? `${baseLabel}-Part-${partIndex}` : baseLabel,
+      });
+    }
+  }
+  return out.sort((a, b) => a.label.localeCompare(b.label));
+}
+
 /** Download a prebuilt ZIP object from storage. */
 export function buildPrebuiltZipDownloadUrl(eventId: string, zipObjectPath: string): string {
   const origin = getSiteOrigin();

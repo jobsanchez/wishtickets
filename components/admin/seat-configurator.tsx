@@ -107,6 +107,10 @@ interface Section {
   show_seat_selection?: boolean;
   remaining?: number;
   column_direction?: string | null;
+  inventory_count?: number;
+  inventory_images_count?: number;
+  inventory_allocated_count?: number;
+  inventory_seats_count?: number;
 }
 
 interface Seat {
@@ -177,6 +181,29 @@ export function SeatConfigurator({ eventId, venueId, venueName = "", initialSeat
   const [deleteTemplateId, setDeleteTemplateId] = useState<string | null>(null);
   const [deleteTemplateSaving, setDeleteTemplateSaving] = useState(false);
   const [duplicateSectionDialogMessage, setDuplicateSectionDialogMessage] = useState<string | null>(null);
+  const [generatingTickets, setGeneratingTickets] = useState(false);
+  const [deletingTickets, setDeletingTickets] = useState(false);
+  const [deleteTicketsTarget, setDeleteTicketsTarget] = useState<
+    { mode: "section"; sectionId: string } | { mode: "all" } | null
+  >(null);
+  const [ticketGenProgress, setTicketGenProgress] = useState<{
+    percent: number;
+    message: string;
+    subtitle: string;
+    detail: string;
+  } | null>(null);
+
+  function deletableInventoryCount(sec: Section): number {
+    return Math.max(
+      0,
+      (sec.inventory_count ?? 0) - (sec.inventory_allocated_count ?? 0)
+    );
+  }
+
+  const totalDeletableInventory = useMemo(
+    () => sections.reduce((sum, sec) => sum + deletableInventoryCount(sec), 0),
+    [sections]
+  );
 
   useEffect(() => {
     setSeatMapUrls(initialSeatMapUrls);
@@ -1232,6 +1259,146 @@ export function SeatConfigurator({ eventId, venueId, venueName = "", initialSeat
     await handleGenerateSeats(generateSectionId);
   }
 
+  async function handleGenerateTickets(sectionIds?: string[]) {
+    const targetIds =
+      sectionIds && sectionIds.length > 0 ? sectionIds : sections.map((s) => s.id);
+    if (targetIds.length === 0) {
+      toast.error("Add sections first");
+      return;
+    }
+
+    const seatsReady = targetIds.every((sid) => {
+      const sec = sections.find((s) => s.id === sid);
+      const count =
+        seats.filter((s) => s.event_section_id === sid).length ||
+        sec?.inventory_seats_count ||
+        sec?.capacity ||
+        0;
+      return count > 0;
+    });
+    if (!seatsReady) {
+      toast.error("Generate seats in each section before generating tickets");
+      return;
+    }
+
+    setGeneratingTickets(true);
+    setTicketGenProgress({
+      percent: 10,
+      message: "Generating ticket inventory",
+      subtitle: "Seat configurator",
+      detail: "Creating print ticket rows and rendering images on the server.",
+    });
+
+    try {
+      const res = await fetch(
+        `/api/admin/events/${eventId}/seating/ticket-inventory/generate`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            section_ids: targetIds,
+            generate_images: true,
+          }),
+        }
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error ?? "Failed to generate tickets");
+        return;
+      }
+      setTicketGenProgress({
+        percent: 100,
+        message: "Ticket inventory ready",
+        subtitle: "Seat configurator",
+        detail: `${data.created ?? 0} new, ${data.existing ?? 0} existing, ${data.images_generated ?? 0} images rendered.`,
+      });
+      toast.success(
+        `Tickets: ${data.inventory_total ?? 0} inventory rows (${data.images_generated ?? 0} images)`
+      );
+      await fetchSeating({ preserveExpanded: true, silent: true });
+    } catch {
+      toast.error("Failed to generate tickets");
+    } finally {
+      setGeneratingTickets(false);
+      setTicketGenProgress(null);
+    }
+  }
+
+  async function handleDeleteTickets(sectionIds?: string[]) {
+    const targetIds =
+      sectionIds && sectionIds.length > 0 ? sectionIds : sections.map((s) => s.id);
+    if (targetIds.length === 0) {
+      toast.error("No sections to clear");
+      return;
+    }
+
+    setDeletingTickets(true);
+    setTicketGenProgress({
+      percent: 20,
+      message: "Deleting generated tickets",
+      subtitle: "Seat configurator",
+      detail: "Removing unallocated print ticket rows and storage images. Sold tickets are kept.",
+    });
+
+    try {
+      const res = await fetch(
+        `/api/admin/events/${eventId}/seating/ticket-inventory/delete`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ section_ids: targetIds }),
+        }
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error ?? "Failed to delete tickets");
+        return;
+      }
+      const deleted = data.deleted ?? 0;
+      const kept = data.skipped_allocated ?? 0;
+      setTicketGenProgress({
+        percent: 100,
+        message: "Ticket inventory cleared",
+        subtitle: "Seat configurator",
+        detail:
+          deleted > 0
+            ? `Removed ${deleted} ticket${deleted === 1 ? "" : "s"}${kept > 0 ? `; ${kept} sold ticket${kept === 1 ? "" : "s"} kept` : ""}.`
+            : kept > 0
+              ? `No unallocated tickets to remove (${kept} sold kept).`
+              : "No generated tickets to remove.",
+      });
+      if (deleted > 0) {
+        toast.success(
+          `Deleted ${deleted} generated ticket${deleted === 1 ? "" : "s"}${
+            kept > 0 ? ` (${kept} sold kept)` : ""
+          }`
+        );
+      } else {
+        toast.message(
+          kept > 0
+            ? `No unallocated tickets to delete (${kept} sold kept)`
+            : "No generated tickets to delete"
+        );
+      }
+      await fetchSeating({ preserveExpanded: true, silent: true });
+    } catch {
+      toast.error("Failed to delete tickets");
+    } finally {
+      setDeletingTickets(false);
+      setDeleteTicketsTarget(null);
+      setTicketGenProgress(null);
+    }
+  }
+
+  async function confirmDeleteTickets() {
+    if (!deleteTicketsTarget) return;
+    if (deleteTicketsTarget.mode === "all") {
+      await handleDeleteTickets();
+      return;
+    }
+    await handleDeleteTickets([deleteTicketsTarget.sectionId]);
+  }
+
   async function handleReorder(newOrder: Section[]) {
     const sectionIds = newOrder.map((s) => s.id);
     setSaving(true);
@@ -1276,7 +1443,9 @@ export function SeatConfigurator({ eventId, venueId, venueName = "", initialSeat
     seatMapUploading ||
     seatMapSaving ||
     saveTemplateSaving ||
-    applyTemplateSaving;
+    applyTemplateSaving ||
+    generatingTickets ||
+    deletingTickets;
 
   const seatConfiguratorProgress = useMemo(() => {
     if (seatMapUploading) {
@@ -1306,6 +1475,17 @@ export function SeatConfigurator({ eventId, venueId, venueName = "", initialSeat
         subtitle: "Templates",
         detail: "Loading seats and sections from the selected template.",
       };
+    }
+    if (deletingTickets && ticketGenProgress) {
+      return {
+        message: ticketGenProgress.message,
+        subtitle: ticketGenProgress.subtitle,
+        detail: ticketGenProgress.detail,
+        percent: ticketGenProgress.percent,
+      };
+    }
+    if (generatingTickets && ticketGenProgress) {
+      return ticketGenProgress;
     }
     if (saving) {
       return {
@@ -1428,7 +1608,43 @@ export function SeatConfigurator({ eventId, venueId, venueName = "", initialSeat
         <h2 className="text-lg font-semibold text-foreground">Seat Configurator</h2>
         <p className="text-sm text-foreground-muted">
           Configure sections and seat numbering for this event. Create from scratch or load a saved template.
+          Generate tickets here to create the inventory used for printing and buyer sales.
         </p>
+
+        {sections.length > 0 && (
+          <div className="flex flex-wrap gap-2 items-center">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={generatingTickets || deletingTickets || saving}
+              onClick={() => void handleGenerateTickets()}
+              className="border-[var(--glass-border)]"
+            >
+              Generate all tickets
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={
+                generatingTickets || deletingTickets || saving || totalDeletableInventory === 0
+              }
+              onClick={() => setDeleteTicketsTarget({ mode: "all" })}
+              className="border-red-500/40 text-red-400 hover:bg-red-500/10 hover:text-red-300"
+              title={
+                totalDeletableInventory === 0
+                  ? "No unallocated generated tickets to delete"
+                  : `Remove ${totalDeletableInventory} unallocated ticket(s) across all sections`
+              }
+            >
+              Delete all tickets
+            </Button>
+            <span className="text-xs text-foreground-muted">
+              Creates or removes unallocated print ticket inventory. Sold tickets are always kept.
+            </span>
+          </div>
+        )}
 
         <div>
           <h3 className="font-medium text-foreground mb-3">Sections</h3>
@@ -1550,6 +1766,15 @@ export function SeatConfigurator({ eventId, venueId, venueName = "", initialSeat
                                   onRequestDeleteSelectedSeats={() => setDeleteSelectedSectionId(sec.id)}
                                   sectionSeats={seats.filter((s) => s.event_section_id === sec.id)}
                                   saving={saving}
+                                  generatingTickets={generatingTickets}
+                                  deletingTickets={deletingTickets}
+                                  deletableInventoryCount={deletableInventoryCount(sec)}
+                                  onGenerateTickets={(sectionId) =>
+                                    void handleGenerateTickets([sectionId])
+                                  }
+                                  onDeleteTickets={(sectionId) =>
+                                    setDeleteTicketsTarget({ mode: "section", sectionId })
+                                  }
                                 />
                               ))}
                             </div>
@@ -1853,6 +2078,42 @@ export function SeatConfigurator({ eventId, venueId, venueName = "", initialSeat
         description="This section already has seats. Generating new seats will delete all current seats and create new ones. Continue?"
         confirmLabel="Replace seats"
       />
+      <ConfirmDialog
+        open={!!deleteTicketsTarget}
+        onOpenChange={(open) => !open && setDeleteTicketsTarget(null)}
+        onConfirm={confirmDeleteTickets}
+        title={
+          deleteTicketsTarget?.mode === "all"
+            ? "Delete all generated tickets?"
+            : "Delete generated tickets?"
+        }
+        description={(() => {
+          if (!deleteTicketsTarget) return "";
+          if (deleteTicketsTarget.mode === "all") {
+            const sold = sections.reduce(
+              (sum, sec) => sum + (sec.inventory_allocated_count ?? 0),
+              0
+            );
+            return `Remove ${totalDeletableInventory} unallocated ticket${
+              totalDeletableInventory === 1 ? "" : "s"
+            } across all sections?${
+              sold > 0
+                ? ` ${sold} sold ticket${sold === 1 ? "" : "s"} will be kept.`
+                : ""
+            } Storage images for removed tickets are deleted. You can regenerate tickets afterward.`;
+          }
+          const sec = sections.find((s) => s.id === deleteTicketsTarget.sectionId);
+          const deletable = sec ? deletableInventoryCount(sec) : 0;
+          const sold = sec?.inventory_allocated_count ?? 0;
+          return `Remove ${deletable} unallocated generated ticket${
+            deletable === 1 ? "" : "s"
+          } for ${sec?.name ?? "this section"}?${
+            sold > 0 ? ` ${sold} sold ticket${sold === 1 ? "" : "s"} will be kept.` : ""
+          } Storage images for removed tickets are deleted.`;
+        })()}
+        confirmLabel="Delete tickets"
+        variant="destructive"
+      />
     </div>
   );
 }
@@ -1912,6 +2173,11 @@ interface SortableSectionCardProps {
   onRequestDeleteSelectedSeats: () => void;
   sectionSeats: Seat[];
   saving: boolean;
+  generatingTickets: boolean;
+  deletingTickets: boolean;
+  deletableInventoryCount: number;
+  onGenerateTickets: (sectionId: string) => void;
+  onDeleteTickets: (sectionId: string) => void;
 }
 
 function SortableSectionCard({
@@ -1938,6 +2204,11 @@ function SortableSectionCard({
   onRequestDeleteSelectedSeats,
   sectionSeats,
   saving,
+  generatingTickets,
+  deletingTickets,
+  deletableInventoryCount,
+  onGenerateTickets,
+  onDeleteTickets,
 }: SortableSectionCardProps) {
   const [addRowsCount, setAddRowsCount] = useState(1);
   const [removeRowsCount, setRemoveRowsCount] = useState(1);
@@ -2174,6 +2445,62 @@ function SortableSectionCard({
                 ? "Free Seating (FCFS)"
                 : "Standing Section"}
           </span>
+          <span className="text-xs rounded-md border border-[var(--glass-border)] px-2 py-0.5 text-foreground-muted">
+            Tickets: {sec.inventory_images_count ?? 0}/{sec.inventory_count ?? 0}
+            {(sec.inventory_allocated_count ?? 0) > 0
+              ? ` · ${sec.inventory_allocated_count} sold`
+              : ""}
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs border-[var(--glass-border)] shrink-0"
+            disabled={
+              saving ||
+              generatingTickets ||
+              deletingTickets ||
+              seatCount === 0
+            }
+            onClick={(e) => {
+              e.stopPropagation();
+              onGenerateTickets(sec.id);
+            }}
+            title={
+              seatCount === 0
+                ? "Generate seats in this section first"
+                : "Create ticket inventory for printing and buyer sales"
+            }
+          >
+            Generate tickets
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs border-red-500/40 text-red-400 hover:bg-red-500/10 hover:text-red-300 shrink-0"
+            disabled={
+              saving ||
+              generatingTickets ||
+              deletingTickets ||
+              deletableInventoryCount === 0
+            }
+            onClick={(e) => {
+              e.stopPropagation();
+              onDeleteTickets(sec.id);
+            }}
+            title={
+              deletableInventoryCount === 0
+                ? (sec.inventory_allocated_count ?? 0) > 0
+                  ? "All generated tickets are sold — nothing to delete"
+                  : "No generated tickets to delete"
+                : `Delete ${deletableInventoryCount} unallocated generated ticket${
+                    deletableInventoryCount === 1 ? "" : "s"
+                  }`
+            }
+          >
+            Delete tickets
+          </Button>
         </div>
         <Button
           type="button"

@@ -1,9 +1,11 @@
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { forbiddenUnlessAnyEventSection } from "@/lib/require-event-section";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import crypto from "crypto";
 import { deterministicEncryptedQrForNewSeat } from "@/lib/event-seats/seat-encrypted-qr";
+import { sectionHasAllocatedInventory } from "@/lib/ticket-inventory";
 
 
 /** Excel-style row label: 0->A, 1->B, ..., 25->Z, 26->AA, ... */
@@ -195,6 +197,24 @@ export async function POST(
       row.scan_code = generateScanCode();
     }
     usedCodes.add(row.scan_code);
+  }
+
+  try {
+    const admin = createAdminClient();
+    const { hasAllocated } = await sectionHasAllocatedInventory(admin, id, [
+      parsed.data.event_section_id,
+    ]);
+    if (hasAllocated) {
+      return NextResponse.json(
+        {
+          error:
+            "Cannot regenerate seats: some ticket inventory in this section is already sold. Void those sales first.",
+        },
+        { status: 409 }
+      );
+    }
+  } catch (e) {
+    console.warn("[seating/seats] inventory guard check failed:", e);
   }
 
   const { error: deleteError } = await supabase
