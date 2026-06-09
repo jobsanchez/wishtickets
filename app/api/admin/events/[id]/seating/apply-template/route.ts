@@ -1,5 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
-import { createAdminClient, getAdminClientIfAvailable } from "@/lib/supabase/admin";
+import { getAdminClientIfAvailable } from "@/lib/supabase/admin";
 import { forbiddenUnlessAnyEventSection } from "@/lib/require-event-section";
 import { sectionHasAllocatedInventory } from "@/lib/ticket-inventory";
 import { NextRequest, NextResponse } from "next/server";
@@ -131,7 +131,8 @@ export async function POST(
   }
 
   if (hasExisting && confirm) {
-    if (!getAdminClientIfAvailable()) {
+    const admin = getAdminClientIfAvailable();
+    if (!admin) {
       return NextResponse.json(
         {
           error:
@@ -141,7 +142,6 @@ export async function POST(
       );
     }
     try {
-      const admin = createAdminClient();
       const { data: sectionRows } = await admin
         .from("event_sections")
         .select("id")

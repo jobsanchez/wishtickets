@@ -4,6 +4,15 @@ Changelog of app updates and edited files. Update this file whenever you edit pr
 
 ---
 
+## 2026-06-09 – Release ticket and apply-template guard tweaks
+
+- `lib/admin/release-ticket.ts` – fail closed when inventory deallocation fails before ticket delete
+- `app/api/admin/events/[id]/seating/apply-template/route.ts` – reuse single admin client from getAdminClientIfAvailable
+
+**Updates:** CodeRabbit follow-up: no silent allocation clear on release; no duplicate admin client creation.
+
+---
+
 ## 2026-06-09 – Ticket inventory review fixes
 
 - `app/api/admin/events/[id]/seating/apply-template/route.ts` – fail closed when inventory guard cannot run
