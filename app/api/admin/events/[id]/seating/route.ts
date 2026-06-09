@@ -1,6 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { NextRequest, NextResponse } from "next/server";
 import { forbiddenUnlessAnyEventSection } from "@/lib/require-event-section";
+import { getEventInventorySummaries } from "@/lib/ticket-inventory";
 
 export async function GET(
   request: NextRequest,
@@ -151,10 +153,34 @@ export async function GET(
     }
   }
 
-  const sectionsWithRemaining = (sections ?? []).map((sec) => ({
-    ...sec,
-    remaining: remainingBySection.get(sec.id) ?? (sec.capacity ?? 0),
-  }));
+  const sectionIdList = (sections ?? []).map((s) => s.id as string);
+  let inventoryBySection = new Map<
+    string,
+    {
+      seats_count: number;
+      inventory_count: number;
+      images_count: number;
+      allocated_count: number;
+    }
+  >();
+  try {
+    const admin = createAdminClient();
+    inventoryBySection = await getEventInventorySummaries(admin, id, sectionIdList);
+  } catch (e) {
+    console.warn("[seating GET] inventory summary failed:", e);
+  }
+
+  const sectionsWithRemaining = (sections ?? []).map((sec) => {
+    const inv = inventoryBySection.get(sec.id);
+    return {
+      ...sec,
+      remaining: remainingBySection.get(sec.id) ?? (sec.capacity ?? 0),
+      inventory_count: inv?.inventory_count ?? 0,
+      inventory_images_count: inv?.images_count ?? 0,
+      inventory_allocated_count: inv?.allocated_count ?? 0,
+      inventory_seats_count: inv?.seats_count ?? 0,
+    };
+  });
 
   type SeatStatus = "available" | "reserved" | "sold" | "hold";
   const seatsWithStatus = allSeats.map((seat) => {

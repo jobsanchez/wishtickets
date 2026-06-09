@@ -120,6 +120,7 @@ export function SeatPricing({ eventId, venueId }: SeatPricingProps) {
   const [localFree, setLocalFree] = useState<Record<string, boolean>>({});
   const [earlyBirdEnabled, setEarlyBirdEnabled] = useState(false);
   const [saleSuccessEmailEnabled, setSaleSuccessEmailEnabled] = useState(false);
+  const [requireTicketInventory, setRequireTicketInventory] = useState(false);
   const [localEarlyBird, setLocalEarlyBird] = useState<Record<string, number>>({});
   const [localEarlyBirdEnabled, setLocalEarlyBirdEnabled] = useState<Record<string, boolean>>({});
   const [eventStartIso, setEventStartIso] = useState<string | null>(null);
@@ -163,6 +164,7 @@ export function SeatPricing({ eventId, venueId }: SeatPricingProps) {
         const eventStart: string | null = data.event_start ?? null;
         setEventStartIso(eventStart);
         setSaleSuccessEmailEnabled(Boolean(data.sale_success_email_enabled));
+        setRequireTicketInventory(Boolean(data.require_ticket_inventory));
         setSaleLabel(
           typeof data.sale_label === "string" ? data.sale_label.toUpperCase() : ""
         );
@@ -309,12 +311,14 @@ export function SeatPricing({ eventId, venueId }: SeatPricingProps) {
         early_bird_enabled: boolean;
         sale_success_email_enabled: boolean;
         sale_label: string | null;
+        require_ticket_inventory: boolean;
       } = {
         prices: priceRows,
         early_bird: earlyBirdRows,
         early_bird_enabled: earlyBirdEnabled,
         sale_success_email_enabled: saleSuccessEmailEnabled,
         sale_label: saleLabel.trim() ? saleLabel.trim() : null,
+        require_ticket_inventory: requireTicketInventory,
       };
       if (earlyBirdEnabled && eventStartIso) {
         const eventDate = startOfLocalDay(new Date(eventStartIso));
@@ -573,6 +577,17 @@ export function SeatPricing({ eventId, venueId }: SeatPricingProps) {
           />
           <Label htmlFor="sale-success-email-enabled" className="text-foreground-muted text-sm">
             Email admins when sale succeeds
+          </Label>
+        </div>
+        <div className="flex items-center gap-2">
+          <Switch
+            id="require-ticket-inventory"
+            checked={requireTicketInventory}
+            onCheckedChange={setRequireTicketInventory}
+            disabled={saving}
+          />
+          <Label htmlFor="require-ticket-inventory" className="text-foreground-muted text-sm">
+            Require Seat Configurator ticket inventory before sales
           </Label>
         </div>
       </div>

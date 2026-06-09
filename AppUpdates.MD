@@ -4,6 +4,106 @@ Changelog of app updates and edited files. Update this file whenever you edit pr
 
 ---
 
+## 2026-06-09 – Propagate errors from inventory allocation clear helpers
+
+- `lib/ticket-inventory/allocate.ts` – `clearInventoryAllocationForTicket` and `clearInventoryAllocation` throw on Supabase update errors
+
+**Updates:** release-ticket fail-closed path now receives real DB failures from deallocation.
+
+---
+
+## 2026-06-09 – Release ticket and apply-template guard tweaks
+
+- `lib/admin/release-ticket.ts` – fail closed when inventory deallocation fails before ticket delete
+- `app/api/admin/events/[id]/seating/apply-template/route.ts` – reuse single admin client from getAdminClientIfAvailable
+
+**Updates:** CodeRabbit follow-up: no silent allocation clear on release; no duplicate admin client creation.
+
+---
+
+## 2026-06-09 – Ticket inventory review fixes
+
+- `app/api/admin/events/[id]/seating/apply-template/route.ts` – fail closed when inventory guard cannot run
+- `lib/ticket-inventory/allocate.ts` – optional encrypted_qr; rollback partial allocations on failure
+- `lib/ticket-inventory/ensure-inventory.ts` – batch backfill event_seats.encrypted_qr before inserts
+- `lib/ticket-inventory/generate-images.ts` – check print_tickets update errors
+- `lib/ticket-inventory/summary.ts`, `delete-inventory.ts`, `build-sale-ticket.ts` – query/count fixes
+- `components/admin/seat-configurator.tsx` – useMemo deps for ticket progress overlay
+- `lib/admin/release-ticket.ts`, `lib/print-tickets/generate.ts` – minor cleanups
+
+**Updates:** Hardens inventory safety checks and avoids wrong encrypted_qr fallback / stale progress UI.
+
+---
+
+## 2026-06-09 – Seat Configurator: Delete generated tickets
+
+- `lib/ticket-inventory/delete-inventory.ts` – remove unallocated `print_tickets` + storage PNGs per section
+- `app/api/admin/events/[id]/seating/ticket-inventory/delete/route.ts` – POST delete API
+- `components/admin/seat-configurator.tsx` – per-section and “Delete all tickets” buttons with confirm dialog
+
+**Updates:** Clears unallocated ticket inventory for regeneration; sold/allocated tickets are kept.
+
+---
+
+## 2026-06-09 – Ticket art: Free Seating / Standing seat label on inventory PNGs
+
+- `lib/ticket-image.ts` – `formatTicketSeatDisplayLabel`; Seat Configurator `generateTicketImageForPrint` shows "Free Seating" or "Standing" instead of row/seat for those section types
+
+**Updates:** Regenerate section tickets in Seat Configurator to refresh existing PNGs.
+
+---
+
+## 2026-06-09 – Manual distribution email/ZIP scoped to assigned tickets only
+
+- `lib/manual-assignment-email/resolve-manual-assignment-download-links.ts` – prefer booking-scoped prebuilt ZIPs; else file-scoped download links
+- `lib/manual-assignment-email/send-manual-assignment-ticket-batch.ts` – use scoped links instead of whole-section folder ZIPs
+- `lib/print-tickets/folder-links.ts` – `buildTicketFilesZipDownloadUrl`, `buildTicketScopedDownloadItems`, `resolveTicketImageObjectPaths`
+- `app/api/print-ticket-folders/download-zip/route.ts` – `files` query param zips only listed storage objects
+- `lib/print-tickets/section-zip-jobs.ts` – booking-scoped ZIP listing no longer recurses entire shared section folders
+
+**Updates:** Send email for a 3-ticket manual assignment no longer attaches a ZIP of every ticket in the Gold section (inventory-backed images share section storage paths).
+
+---
+
+## 2026-06-09 – Buyer ticket images reuse Seat Configurator inventory
+
+- `app/api/bookings/[bookingId]/tickets/[ticketId]/image/route.ts` – serve `print_tickets` PNG when `print_ticket_id` is set; no per-ticket UUID render
+- `app/api/checkout/route.ts` – email attachments resolve inventory images before legacy mint
+- `lib/ticket-inventory/allocate.ts` – copy `ticket_image_url` from inventory on finalize
+
+**Updates:** Confirmation page and buyer email no longer call `generateTicketImageForTicketId` for inventory-backed sales.
+
+---
+
+## 2026-06-09 – Checkout: allocate print inventory after ticket insert
+
+- `lib/ticket-inventory/build-sale-ticket.ts` – stop marking `print_tickets.allocated_ticket_id` before insert
+- `lib/ticket-inventory/allocate.ts` – `finalizeInventoryAllocationsForSaleTickets` runs after tickets exist
+- `app/api/checkout/route.ts`, `app/api/admin/assignments/[id]/confirm/route.ts` – finalize allocation post-insert; rollback on conflict
+
+**Updates:** Fixes checkout 500 from `print_tickets_allocated_ticket_id_fkey` when allocating inventory during sale.
+
+---
+
+## 2026-06-09 – Seat Configurator ticket inventory (source of truth)
+
+- `supabase/migrations/00249_ticket_inventory_allocation.sql` – `print_tickets` allocation columns, `tickets.print_ticket_id`, `events.require_ticket_inventory`
+- `lib/ticket-inventory/*` – ensure/allocate inventory, image generation, summaries, sale ticket builders
+- `app/api/admin/events/[id]/seating/ticket-inventory/generate/route.ts` – generate inventory API
+- `app/api/admin/events/[id]/seating/route.ts` – per-section inventory counts in GET
+- `components/admin/seat-configurator.tsx` – Generate tickets per section / all; inventory status chips
+- `lib/print-tickets/generate.ts` – seat-linked generation delegates to inventory service
+- `app/api/checkout/route.ts`, `app/api/admin/assignments/[id]/confirm/route.ts` – allocate from `print_tickets` on sale
+- `lib/confirm-booking.ts`, `lib/manual-assignment-confirm/generate-manual-assignment-ticket-images-batch.ts` – reuse inventory PNGs
+- `app/api/admin/events/[id]/seating/seats/route.ts`, `apply-template/route.ts` – block regen when sold inventory exists
+- `app/api/admin/events/[id]/pricing/route.ts`, `components/admin/seat-pricing.tsx` – require ticket inventory toggle
+- `lib/admin/release-ticket.ts`, `lib/event-seats/seat-encrypted-qr.ts` – clear allocation on release/rotation
+- `components/admin/print-tickets-tab.tsx` – copy update for shared inventory
+
+**Updates:** Seat Configurator can generate `print_tickets` inventory used for printing and buyer sales; optional event flag blocks sales without inventory.
+
+---
+
 ## 2026-06-09 – Remove accidental repo files
 
 - `.gitignore` – ignore `Archive.zip` and `Untitled`

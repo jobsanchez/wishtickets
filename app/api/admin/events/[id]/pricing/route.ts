@@ -17,7 +17,7 @@ export async function GET(
     const { data: event, error: eventError } = await supabase
       .from("events")
       .select(
-        "venue_id, event_start, early_bird_starts_at, early_bird_ends_at, early_bird_enabled, sale_success_email_enabled, sale_label"
+        "venue_id, event_start, early_bird_starts_at, early_bird_ends_at, early_bird_enabled, sale_success_email_enabled, sale_label, require_ticket_inventory"
       )
       .eq("id", id)
       .single();
@@ -79,6 +79,7 @@ export async function GET(
       early_bird_enabled: event?.early_bird_enabled ?? false,
       sale_success_email_enabled: event?.sale_success_email_enabled ?? false,
       sale_label: event?.sale_label ?? null,
+      require_ticket_inventory: event?.require_ticket_inventory ?? false,
     });
   } catch (e) {
     return NextResponse.json(
@@ -108,6 +109,7 @@ const priceSchema = z.object({
   early_bird_enabled: z.boolean().optional(),
   sale_success_email_enabled: z.boolean().optional(),
   sale_label: z.union([z.string().max(100), z.null()]).optional(),
+  require_ticket_inventory: z.boolean().optional(),
 });
 
 export async function PATCH(
@@ -134,6 +136,7 @@ export async function PATCH(
     early_bird_enabled,
     sale_success_email_enabled,
     sale_label,
+    require_ticket_inventory,
   } = parsed.data;
   if (early_bird && early_bird.length > 0) {
     if (!early_bird_starts_at || !early_bird_ends_at) {
@@ -191,6 +194,7 @@ export async function PATCH(
     early_bird_enabled?: boolean;
     sale_success_email_enabled?: boolean;
     sale_label?: string | null;
+    require_ticket_inventory?: boolean;
   } = {};
   if (early_bird !== undefined) {
     eventUpdate.early_bird_starts_at = early_bird.length > 0 ? early_bird_starts_at ?? null : null;
@@ -205,6 +209,9 @@ export async function PATCH(
   if (sale_label !== undefined) {
     const trimmed = sale_label?.trim() ?? "";
     eventUpdate.sale_label = trimmed.length > 0 ? trimmed : null;
+  }
+  if (require_ticket_inventory !== undefined) {
+    eventUpdate.require_ticket_inventory = require_ticket_inventory;
   }
   if (Object.keys(eventUpdate).length > 0) {
     const { error } = await supabase.from("events").update(eventUpdate).eq("id", id);

@@ -11,8 +11,13 @@ import {
 } from "@/lib/paymongo-processing-fees";
 import { createCheckoutSession, getPaymongoCheckoutUrl } from "@/lib/paymongo";
 import { createAndUploadTicketQR } from "@/lib/ticket-qr";
-import { buildEncryptedQrFromQrData, formatQrData } from "@/lib/qr-data";
-import { ensureSeatEncryptedQrForSale } from "@/lib/event-seats/seat-encrypted-qr";
+import {
+  buildSeatSaleTicket,
+  buildSectionSaleTicket,
+  finalizeInventoryAllocationsForSaleTickets,
+  resolveTicketImageUrl,
+  TicketInventoryError,
+} from "@/lib/ticket-inventory";
 import {
   generateAndUploadTicketImage,
   getResolvedTicketTemplate,
@@ -51,13 +56,25 @@ function escapeHtml(s: string): string {
 const CHECKOUT_TICKET_ATTACHMENT_CONCURRENCY = 10;
 
 async function buildCheckoutEmailTicketAttachment(
-  t: { id: string; qr_data: string; encrypted_qr?: string | null; ticket_image_url: string | null },
+  admin: ReturnType<typeof createAdminClient>,
+  t: {
+    id: string;
+    qr_data: string;
+    encrypted_qr?: string | null;
+    ticket_image_url: string | null;
+    print_ticket_id?: string | null;
+  },
   index: number
 ): Promise<{ filename: string; content: Buffer }> {
   let buf: Buffer;
   const qrPayload = t.encrypted_qr ?? t.qr_data;
   let imageUrlForExt: string | null = null;
-  const ticketImageUrl = t.ticket_image_url;
+
+  let ticketImageUrl =
+    (await resolveTicketImageUrl(admin, t, {
+      generateIfMissing: Boolean(t.print_ticket_id),
+    })) ?? t.ticket_image_url;
+
   if (ticketImageUrl) {
     const res = await fetch(ticketImageUrl);
     if (res.ok) {
@@ -66,7 +83,7 @@ async function buildCheckoutEmailTicketAttachment(
     } else {
       buf = await generateQRBuffer(qrPayload);
     }
-  } else {
+  } else if (!t.print_ticket_id) {
     const generated = await generateTicketImageForTicketId(t.id);
     if (generated) {
       const res = await fetch(generated);
@@ -79,19 +96,28 @@ async function buildCheckoutEmailTicketAttachment(
     } else {
       buf = await generateQRBuffer(qrPayload);
     }
+  } else {
+    buf = await generateQRBuffer(qrPayload);
   }
   const ext = imageUrlForExt ? ticketAttachmentExtFromImageUrl(imageUrlForExt) : "png";
   return { filename: `ticket-${index + 1}.${ext}`, content: buf };
 }
 
 async function buildCheckoutEmailAttachmentsParallel(
-  ticketRows: { id: string; qr_data: string; encrypted_qr?: string | null; ticket_image_url: string | null }[]
+  adminClient: ReturnType<typeof createAdminClient>,
+  ticketRows: {
+    id: string;
+    qr_data: string;
+    encrypted_qr?: string | null;
+    ticket_image_url: string | null;
+    print_ticket_id?: string | null;
+  }[]
 ): Promise<{ filename: string; content: Buffer }[]> {
   const out: { filename: string; content: Buffer }[] = [];
   for (let start = 0; start < ticketRows.length; start += CHECKOUT_TICKET_ATTACHMENT_CONCURRENCY) {
     const slice = ticketRows.slice(start, start + CHECKOUT_TICKET_ATTACHMENT_CONCURRENCY);
     const batch = await Promise.all(
-      slice.map((t, j) => buildCheckoutEmailTicketAttachment(t, start + j))
+      slice.map((t, j) => buildCheckoutEmailTicketAttachment(adminClient, t, start + j))
     );
     out.push(...batch);
   }
@@ -792,102 +818,71 @@ export async function POST(request: NextRequest) {
       encrypted_qr: string;
       qr_image_url: string | null;
       ticket_image_url: string | null;
+      print_ticket_id?: string | null;
       recipient_name?: string;
     };
 
-    let seatTicketRows: TicketRowInsert[];
-    let sectionTicketRows: TicketRowInsert[];
+    let seatTicketRows: TicketRowInsert[] = [];
+    let sectionTicketRows: TicketRowInsert[] = [];
 
-    if (usePayMongo) {
-      seatTicketRows = await Promise.all(
-        seatItems.map(async (item) => {
-          const id = randomUUID();
-          const seatData = seatDataMap.get(item.seat_id);
-          const qrData =
+    const recipientName =
+      isOnSitePayment && on_site_payment ? on_site_payment.customer_name : undefined;
+
+    try {
+      for (const item of seatItems) {
+        const seatData = seatDataMap.get(item.seat_id);
+        const row = await buildSeatSaleTicket(admin, {
+          bookingId: booking.id,
+          seatId: item.seat_id,
+          eventId: event_id,
+          recipientName,
+          mintContext:
             eventCode && seatData
-              ? registerUniqueQr(
-                  formatQrData({
-                    eventCode,
-                    sectionCode: seatData.sectionCode,
-                    rowLabel: seatData.rowLabel,
-                    seatNumber: seatData.seatNumber,
-                  })
-                )
-              : `WT-${booking.id}-${item.seat_id}`;
-          if (!(eventCode && seatData)) usedQrData.add(qrData);
-          const encrypted_qr =
-            eventCode && seatData
-              ? await ensureSeatEncryptedQrForSale(admin, item.seat_id, {
+              ? {
                   eventCode,
                   sectionCode: seatData.sectionCode,
                   rowLabel: seatData.rowLabel,
                   seatNumber: seatData.seatNumber,
-                })
-              : buildEncryptedQrFromQrData(qrData);
-          return {
-            id,
-            booking_id: booking.id,
-            seat_id: item.seat_id,
-            section_id: null,
-            quantity: 1,
-            qr_data: qrData,
-            encrypted_qr,
-            qr_image_url: null,
-            ticket_image_url: null,
-          };
-        })
-      );
-      sectionTicketRows = [];
+                }
+              : null,
+          registerUniqueQr,
+        });
+        seatTicketRows.push(row);
+      }
+
       for (const item of sectionItemsRaw) {
         const sectionCode = sectionCodeMap.get(item.section_id) ?? "SEC";
         const seatingType = sectionSeatingTypeMap.get(item.section_id) ?? "assigned";
         const qty = item.quantity ?? 1;
         for (let n = 1; n <= qty; n++) {
-          const id = randomUUID();
-          const qrData = eventCode
-            ? registerUniqueQr(
-                formatQrData({
-                  eventCode,
-                  sectionCode,
-                  rowLabel: seatingType === "standing" ? "ST" : "FS",
-                  seatNumber: String(n),
-                })
-              )
-            : registerUniqueQr(
-                `WT-${booking.id}-${item.section_id}-${n}-${randomUUID().slice(0, 8)}`
-              );
-          sectionTicketRows.push({
-            id,
-            booking_id: booking.id,
-            seat_id: null,
-            section_id: item.section_id,
-            quantity: 1,
-            qr_data: qrData,
-            encrypted_qr: buildEncryptedQrFromQrData(qrData),
-            qr_image_url: null,
-            ticket_image_url: null,
+          const row = await buildSectionSaleTicket(admin, {
+            bookingId: booking.id,
+            eventId: event_id,
+            sectionId: item.section_id,
+            slotIndex: n,
+            seatingType,
+            sectionCode,
+            eventCode,
+            registerUniqueQr,
+            recipientName,
           });
+          sectionTicketRows.push(row);
         }
       }
-    } else {
+    } catch (e) {
+      if (e instanceof TicketInventoryError) {
+        await supabase.from("bookings").delete().eq("id", booking.id);
+        return NextResponse.json({ error: e.message }, { status: e.status });
+      }
+      throw e;
+    }
+
+    if (!usePayMongo) {
       const resolvedTemplate = await getResolvedTicketTemplate(eventRow);
-      const seatJobs = await Promise.all(
-        seatItems.map(async (item) => {
-          const id = randomUUID();
-          const seatData = seatDataMap.get(item.seat_id);
-          const qrData =
-            eventCode && seatData
-              ? registerUniqueQr(
-                  formatQrData({
-                    eventCode,
-                    sectionCode: seatData.sectionCode,
-                    rowLabel: seatData.rowLabel,
-                    seatNumber: seatData.seatNumber,
-                  })
-                )
-              : `WT-${booking.id}-${item.seat_id}`;
-          if (!(eventCode && seatData)) usedQrData.add(qrData);
-          const seatInfo = seatDataMap.get(item.seat_id);
+      seatTicketRows = await Promise.all(
+        seatTicketRows.map(async (row) => {
+          if (row.ticket_image_url || row.print_ticket_id) return row;
+          const seatInfo = row.seat_id ? seatDataMap.get(row.seat_id) : null;
           const seatLabel = seatInfo
             ? seatInfo.seatingType === "standing"
               ? "Standing"
@@ -897,165 +892,85 @@ export async function POST(request: NextRequest) {
             : "General";
           const sectionId = seatInfo?.sectionId ?? null;
           const priceCents = sectionId ? getPriceForSection(sectionId) : DEFAULT_PRICE_CENTS;
-          const encryptedQr =
-            eventCode && seatData
-              ? await ensureSeatEncryptedQrForSale(admin, item.seat_id, {
-                  eventCode,
-                  sectionCode: seatData.sectionCode,
-                  rowLabel: seatData.rowLabel,
-                  seatNumber: seatData.seatNumber,
-                })
-              : buildEncryptedQrFromQrData(qrData);
-          return {
-            id,
-            item,
-            qrData,
-            encryptedQr,
-            seatInfo,
+          const qrImageUrl = await createAndUploadTicketQR(row.id, row.encrypted_qr);
+          const ticketImageUrl = await generateAndUploadTicketImage(row.id, {
+            eventTitle: eventRow?.title ?? "Event",
+            venueName,
+            eventStart: eventRow?.event_start ?? new Date().toISOString(),
+            sectionCode: seatInfo?.sectionCode ?? "—",
+            sectionName: seatInfo?.sectionName ?? "—",
+            sectionGroup: seatInfo?.sectionGroup ?? undefined,
             seatLabel,
             priceCents,
+            qrData: row.encrypted_qr,
+            ticketNumber: row.qr_data,
+            encryptedQr: row.encrypted_qr,
+            templateImageUrl: resolvedTemplate.templateImageUrl,
+            layoutConfig: resolvedTemplate.layoutConfig ?? undefined,
+          });
+          return {
+            ...row,
+            qr_image_url: qrImageUrl,
+            ticket_image_url: ticketImageUrl,
           };
         })
       );
-      seatTicketRows = await Promise.all(
-        seatJobs.map(
-          async ({ id, item, qrData, encryptedQr, seatInfo, seatLabel, priceCents }) => {
-            const qrImageUrl = await createAndUploadTicketQR(id, encryptedQr);
-            const ticketImageUrl = await generateAndUploadTicketImage(id, {
-              eventTitle: eventRow?.title ?? "Event",
-              venueName,
-              eventStart: eventRow?.event_start ?? new Date().toISOString(),
-              sectionCode: seatInfo?.sectionCode ?? "—",
-              sectionName: seatInfo?.sectionName ?? "—",
-              sectionGroup: seatInfo?.sectionGroup ?? undefined,
-              seatLabel,
-              priceCents,
-              qrData: encryptedQr,
-              ticketNumber: qrData,
-              encryptedQr,
-              templateImageUrl: resolvedTemplate.templateImageUrl,
-              layoutConfig: resolvedTemplate.layoutConfig ?? undefined,
-            });
-            return {
-              id,
-              booking_id: booking.id,
-              seat_id: item.seat_id,
-              section_id: null,
-              quantity: 1,
-              qr_data: qrData,
-              encrypted_qr: encryptedQr,
-              qr_image_url: qrImageUrl,
-              ticket_image_url: ticketImageUrl,
-              ...(isOnSitePayment && on_site_payment
-                ? { recipient_name: on_site_payment.customer_name }
-                : {}),
-            };
-          }
-        )
-      );
 
-      type SectionJob = {
-        id: string;
-        item: (typeof sectionItemsRaw)[0];
-        qrData: string;
-        encryptedQr: string;
-        sectionCode: string;
-        sectionName: string;
-        sectionGroup: string | null;
-        seatLabel: string;
-        priceCents: number;
-      };
-      const sectionJobs: SectionJob[] = [];
-      for (const item of sectionItemsRaw) {
-        const sectionCode = sectionCodeMap.get(item.section_id) ?? "SEC";
-        const sectionName = sectionNameMap.get(item.section_id) ?? "—";
-        const sectionGroup = sectionGroupMap.get(item.section_id) ?? null;
-        const seatingType = sectionSeatingTypeMap.get(item.section_id) ?? "assigned";
-        const seatLabel =
-          seatingType === "standing"
-            ? "Standing"
-            : seatingType === "free"
-              ? "Free Seating"
-              : "General";
-        const priceCents = getPriceForSection(item.section_id);
-        const qty = item.quantity ?? 1;
-        for (let n = 1; n <= qty; n++) {
-          const id = randomUUID();
-          const qrData = eventCode
-            ? registerUniqueQr(
-                formatQrData({
-                  eventCode,
-                  sectionCode,
-                  rowLabel: seatingType === "standing" ? "ST" : "FS",
-                  seatNumber: String(n),
-                })
-              )
-            : registerUniqueQr(
-                `WT-${booking.id}-${item.section_id}-${n}-${randomUUID().slice(0, 8)}`
-              );
-          sectionJobs.push({
-            id,
-            item,
-            qrData,
-            encryptedQr: buildEncryptedQrFromQrData(qrData),
-            sectionCode,
-            sectionName,
-            sectionGroup,
-            seatLabel,
-            priceCents,
-          });
-        }
-      }
       sectionTicketRows = await Promise.all(
-        sectionJobs.map(
-          async ({
-            id,
-            item,
-            qrData,
-            encryptedQr,
+        sectionTicketRows.map(async (row) => {
+          if (row.ticket_image_url || row.print_ticket_id) return row;
+          const sectionCode = sectionCodeMap.get(row.section_id ?? "") ?? "SEC";
+          const sectionName = sectionNameMap.get(row.section_id ?? "") ?? "—";
+          const sectionGroup = sectionGroupMap.get(row.section_id ?? "") ?? null;
+          const seatingType = sectionSeatingTypeMap.get(row.section_id ?? "") ?? "assigned";
+          const seatLabel =
+            seatingType === "standing"
+              ? "Standing"
+              : seatingType === "free"
+                ? "Free Seating"
+                : "General";
+          const priceCents = row.section_id
+            ? getPriceForSection(row.section_id)
+            : DEFAULT_PRICE_CENTS;
+          const qrImageUrl = await createAndUploadTicketQR(row.id, row.encrypted_qr);
+          const ticketImageUrl = await generateAndUploadTicketImage(row.id, {
+            eventTitle: eventRow?.title ?? "Event",
+            venueName,
+            eventStart: eventRow?.event_start ?? new Date().toISOString(),
             sectionCode,
             sectionName,
-            sectionGroup,
+            sectionGroup: sectionGroup ?? undefined,
             seatLabel,
             priceCents,
-          }) => {
-            const qrImageUrl = await createAndUploadTicketQR(id, encryptedQr);
-            const ticketImageUrl = await generateAndUploadTicketImage(id, {
-              eventTitle: eventRow?.title ?? "Event",
-              venueName,
-              eventStart: eventRow?.event_start ?? new Date().toISOString(),
-              sectionCode,
-              sectionName,
-              sectionGroup: sectionGroup ?? undefined,
-              seatLabel,
-              priceCents,
-              qrData: encryptedQr,
-              ticketNumber: qrData,
-              encryptedQr,
-              templateImageUrl: resolvedTemplate.templateImageUrl,
-              layoutConfig: resolvedTemplate.layoutConfig ?? undefined,
-            });
-            return {
-              id,
-              booking_id: booking.id,
-              seat_id: null,
-              section_id: item.section_id,
-              quantity: 1,
-              qr_data: qrData,
-              encrypted_qr: encryptedQr,
-              qr_image_url: qrImageUrl,
-              ticket_image_url: ticketImageUrl,
-              ...(isOnSitePayment && on_site_payment
-                ? { recipient_name: on_site_payment.customer_name }
-                : {}),
-            };
-          }
-        )
+            qrData: row.encrypted_qr,
+            ticketNumber: row.qr_data,
+            encryptedQr: row.encrypted_qr,
+            templateImageUrl: resolvedTemplate.templateImageUrl,
+            layoutConfig: resolvedTemplate.layoutConfig ?? undefined,
+          });
+          return {
+            ...row,
+            qr_image_url: qrImageUrl,
+            ticket_image_url: ticketImageUrl,
+          };
+        })
       );
     }
 
     const ticketRows = [...seatTicketRows, ...sectionTicketRows];
-    await supabase.from("tickets").insert(ticketRows);
+    const { error: ticketsInsertError } = await supabase.from("tickets").insert(ticketRows);
+    if (ticketsInsertError) {
+      throw new Error(ticketsInsertError.message);
+    }
+    try {
+      await finalizeInventoryAllocationsForSaleTickets(admin, ticketRows);
+    } catch (e) {
+      await supabase.from("tickets").delete().eq("booking_id", booking.id);
+      if (e instanceof TicketInventoryError) {
+        return NextResponse.json({ error: e.message }, { status: e.status });
+      }
+      throw e;
+    }
 
     if (addOnBookingLinesForDb.length > 0) {
       for (const l of addOnBookingLinesForDb) {
@@ -1207,7 +1122,7 @@ export async function POST(request: NextRequest) {
           ? ticketDetailsSubtotalCents
           : totalCents + discountCents - addOnSubtotalCents;
       const subtotalCents = ticketSubtotalCents + addOnSubtotalCents;
-      const attachments = await buildCheckoutEmailAttachmentsParallel(ticketRows);
+      const attachments = await buildCheckoutEmailAttachmentsParallel(admin, ticketRows);
       try {
         await sendTicketEmail({
           to: customerEmail,
@@ -1286,7 +1201,7 @@ export async function POST(request: NextRequest) {
           ? ticketDetailsSubtotalCents
           : totalCents + discountCents - addOnSubtotalCents;
       const subtotalCents = ticketSubtotalCents + addOnSubtotalCents;
-      const attachments = await buildCheckoutEmailAttachmentsParallel(ticketRows);
+      const attachments = await buildCheckoutEmailAttachmentsParallel(admin, ticketRows);
       try {
         await sendTicketEmail({
           to: user.email,

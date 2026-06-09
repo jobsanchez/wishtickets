@@ -1,5 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
+import { getAdminClientIfAvailable } from "@/lib/supabase/admin";
 import { forbiddenUnlessAnyEventSection } from "@/lib/require-event-section";
+import { sectionHasAllocatedInventory } from "@/lib/ticket-inventory";
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { randomUUID } from "crypto";
@@ -126,6 +128,45 @@ export async function POST(
       existing_section_count: existingSectionCount ?? 0,
       existing_seat_count: existingSeatCount ?? 0,
     });
+  }
+
+  if (hasExisting && confirm) {
+    const admin = getAdminClientIfAvailable();
+    if (!admin) {
+      return NextResponse.json(
+        {
+          error:
+            "Cannot verify ticket inventory safety: SUPABASE_SERVICE_ROLE_KEY is not configured.",
+        },
+        { status: 503 }
+      );
+    }
+    try {
+      const { data: sectionRows } = await admin
+        .from("event_sections")
+        .select("id")
+        .eq("event_id", eventId);
+      const sectionIds = (sectionRows ?? []).map((s) => s.id as string);
+      const { hasAllocated } = await sectionHasAllocatedInventory(admin, eventId, sectionIds);
+      if (hasAllocated) {
+        return NextResponse.json(
+          {
+            error:
+              "Cannot apply template: sold ticket inventory exists for this event. Void those sales first.",
+          },
+          { status: 409 }
+        );
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("[apply-template] inventory guard check failed:", e);
+      return NextResponse.json(
+        {
+          error: `Cannot apply template: ticket inventory safety check failed (${msg}).`,
+        },
+        { status: 500 }
+      );
+    }
   }
 
   await supabase.from("event_prices").delete().eq("event_id", eventId);

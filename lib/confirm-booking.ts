@@ -5,6 +5,8 @@ import {
   generateTicketImageForTicketId,
   ticketAttachmentExtFromImageUrl,
 } from "@/lib/ticket-image";
+import { resolveTicketImageUrl } from "@/lib/ticket-inventory";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { getPaymongoReferenceNumber } from "@/lib/paymongo";
 import { formatEventDateTimeLong } from "@/lib/event-datetime";
 
@@ -325,7 +327,9 @@ export async function confirmBooking(
   // Fresh rows so attachment PNGs reuse URLs if confirmation page (or another worker) uploaded first.
   const { data: ticketsForAttachments } = await supabase
     .from("tickets")
-    .select("id, qr_data, encrypted_qr, qr_image_url, ticket_image_url, quantity, seat_id, section_id")
+    .select(
+      "id, qr_data, encrypted_qr, qr_image_url, ticket_image_url, quantity, seat_id, section_id, print_ticket_id"
+    )
     .eq("booking_id", booking.id);
 
   type TicketRow = {
@@ -333,9 +337,17 @@ export async function confirmBooking(
     qr_data: string;
     encrypted_qr?: string | null;
     ticket_image_url?: string | null;
+    print_ticket_id?: string | null;
   };
   const ticketRows = (ticketsForAttachments ?? tickets) as TicketRow[];
   let ticketsGeneratedCount = 0;
+
+  let inventoryAdmin: ReturnType<typeof createAdminClient> | null = null;
+  try {
+    inventoryAdmin = createAdminClient();
+  } catch {
+    inventoryAdmin = null;
+  }
 
   /** Up-front parallel generation (same as checkout Promise.all) so we don’t serialize per-ticket. */
   const preGeneratedUrlByTicketId = new Map<string, string>();
@@ -345,6 +357,15 @@ export async function confirmBooking(
     const batch = await Promise.all(
       slice.map(async (t) => {
         try {
+          if (inventoryAdmin) {
+            const fromInventory = await resolveTicketImageUrl(inventoryAdmin, t, {
+              generateIfMissing: true,
+            });
+            if (fromInventory) return { id: t.id, url: fromInventory };
+          }
+          if (t.print_ticket_id) {
+            return { id: t.id, url: undefined };
+          }
           const url = await generateTicketImageForTicketId(t.id);
           return { id: t.id, url: url ?? undefined };
         } catch (e) {
@@ -380,10 +401,21 @@ export async function confirmBooking(
         : preGeneratedUrlByTicketId.get(t.id);
     if (!ticketImageUrl) {
       try {
-        const generated = await generateTicketImageForTicketId(t.id);
-        if (generated) {
-          ticketsGeneratedCount += 1;
-          ticketImageUrl = generated;
+        if (inventoryAdmin) {
+          const fromInventory = await resolveTicketImageUrl(inventoryAdmin, t, {
+            generateIfMissing: true,
+          });
+          if (fromInventory) {
+            ticketsGeneratedCount += 1;
+            ticketImageUrl = fromInventory;
+          }
+        }
+        if (!ticketImageUrl && !t.print_ticket_id) {
+          const generated = await generateTicketImageForTicketId(t.id);
+          if (generated) {
+            ticketsGeneratedCount += 1;
+            ticketImageUrl = generated;
+          }
         }
       } catch (e) {
         console.error("[confirm-booking] phase=ticket-image-generation-failed", {

@@ -194,6 +194,18 @@ function sanitizePrintFilenamePart(raw: string, maxLen: number): string {
   return s.length > 0 ? s : "x";
 }
 
+/** Ticket art "Seat:" line — free/standing sections never show row/seat numbers. */
+function formatTicketSeatDisplayLabel(opts: {
+  seatingType: string | null | undefined;
+  rowLabel?: string | null;
+  seatNumber?: string | null;
+}): string {
+  const t = (opts.seatingType ?? "").toLowerCase();
+  if (t === "standing") return "Standing";
+  if (t === "free") return "Free Seating";
+  return `Row ${opts.rowLabel ?? "-"} Seat ${opts.seatNumber ?? "-"}`;
+}
+
 function partFolderFromPartitionIndex(partitionIndex?: number | null): string {
   const slot = typeof partitionIndex === "number" && Number.isFinite(partitionIndex)
     ? Math.max(1, Math.floor(partitionIndex))
@@ -1037,13 +1049,11 @@ export async function generateTicketImageForTicketId(
       sectionName = sec?.name ?? sec?.section_code ?? "—";
       const g = sec?.section_group?.trim();
       sectionGroup = g ? g : null;
-      if (sec?.seating_type === "standing") {
-        seatLabel = "Standing";
-      } else if (sec?.seating_type === "free") {
-        seatLabel = "Free Seating";
-      } else {
-        seatLabel = `Row ${seat.row_label ?? "-"} Seat ${seat.seat_number ?? "-"}`;
-      }
+      seatLabel = formatTicketSeatDisplayLabel({
+        seatingType: sec?.seating_type,
+        rowLabel: seat.row_label,
+        seatNumber: seat.seat_number,
+      });
     }
   } else if (ticket.section_id) {
     const { data: sec } = await adminClient
@@ -1055,8 +1065,7 @@ export async function generateTicketImageForTicketId(
     sectionName = sec?.name ?? sec?.section_code ?? "—";
     const g = sec?.section_group?.trim();
     sectionGroup = g ? g : null;
-    seatLabel =
-      sec?.seating_type === "standing" ? "Standing" : "Free Seating";
+    seatLabel = formatTicketSeatDisplayLabel({ seatingType: sec?.seating_type });
   }
 
   const isComplementary = (ticket as { is_complementary?: boolean })?.is_complementary ?? false;
@@ -1212,17 +1221,16 @@ export async function generateTicketImageForPrint({
     if (seatRow) {
       rowLabel = seatRow.row_label ?? "-";
       seatNumber = seatRow.seat_number ?? "-";
-      seatLabel = `Row ${rowLabel} Seat ${seatNumber}`;
+      seatLabel = formatTicketSeatDisplayLabel({
+        seatingType: sectionRow.seating_type,
+        rowLabel,
+        seatNumber,
+      });
     } else {
       seatLabel = "—";
     }
   } else {
-    const base =
-      sectionRow.seating_type === "standing" ? "Standing" : "Free Seating";
-    seatLabel =
-      sectionSlotIndex != null && sectionSlotIndex >= 1
-        ? `${base} — #${sectionSlotIndex}`
-        : base;
+    seatLabel = formatTicketSeatDisplayLabel({ seatingType: sectionRow.seating_type });
   }
 
   const codeMapping = resolveTicketCodeMapping({

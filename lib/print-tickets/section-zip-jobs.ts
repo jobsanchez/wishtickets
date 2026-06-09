@@ -180,18 +180,6 @@ export async function listTicketObjectPathsForBookingSection(
   }
   if (out.size > 0) return [...out].sort((a, b) => a.localeCompare(b));
 
-  for (const row of rows) {
-    const url = row.ticket_image_url;
-    if (typeof url !== "string" || !url) continue;
-    const path =
-      resolveTicketImageStorageObjectPath(url) ?? extractPrintBySectionObjectPathFromUrlString(url);
-    if (!rowInTargetSection(row, path) || !path) continue;
-    const parts = path.split("/").filter(Boolean);
-    if (parts.length < 3 || parts[0] !== "print-by-section") continue;
-    const root = `${parts[0]}/${parts[1]}/${parts[2]}`;
-    return listTicketImagePathsRecursive(admin, root);
-  }
-
   const pfx = normalizeZipFolderPrefix(opts.storageFolderPrefixHint ?? "");
   if (pfx) {
     const byPrefix = new Set<string>();
@@ -406,16 +394,6 @@ export async function listSectionZipObjectPaths(
       storageFolderPrefixHint: folderPrefix,
     });
     if (paths.length === 0) {
-      const votedPrefix = await resolveVotedPrintBySectionFolderPrefixForBookingSection(
-        admin,
-        explicit,
-        opts.eventSectionId
-      );
-      if (votedPrefix) {
-        paths = await listTicketImagePathsRecursive(admin, votedPrefix);
-      }
-    }
-    if (paths.length === 0) {
       const manualSlug = await getManualDistributionEventStorageSlug(
         admin,
         opts.eventId,
@@ -435,6 +413,7 @@ export async function listSectionZipObjectPaths(
         );
       }
     }
+    return paths;
   } else {
     const inferred = await resolveBookingIdFromTicketImagesUnderPrefix(admin, {
       eventId: opts.eventId,

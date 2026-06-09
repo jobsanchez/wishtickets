@@ -18,6 +18,40 @@ function isAllowedZipObject(zipObjectPath: string): boolean {
   return zipObjectPath.startsWith("print-section-zips/");
 }
 
+function isAllowedTicketImageObjectPath(objectPath: string): boolean {
+  const norm = objectPath.replace(/^\/+/, "").trim();
+  if (!/\.(png|jpe?g)$/i.test(norm)) return false;
+  return norm.startsWith("print-bulk-folders/") || norm.startsWith("print-by-section/");
+}
+
+function parseFilesParam(url: URL): string[] {
+  const raw = url.searchParams.getAll("files");
+  const merged: string[] = [];
+  for (const entry of raw) {
+    for (const part of entry.split(",")) {
+      const trimmed = part.trim();
+      if (trimmed) merged.push(trimmed);
+    }
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const path of merged) {
+    if (!isAllowedTicketImageObjectPath(path) || seen.has(path)) continue;
+    seen.add(path);
+    out.push(path);
+  }
+  return out;
+}
+
+function asciiFilenameFromObjectPaths(objectPaths: string[]): string {
+  if (objectPaths.length === 1) {
+    const name = objectPaths[0]!.split("/").filter(Boolean).slice(-1)[0] ?? "tickets";
+    return name.replace(/\.(png|jpe?g)$/i, "");
+  }
+  const folder = objectPaths[0]!.slice(0, objectPaths[0]!.lastIndexOf("/"));
+  return asciiFilenameFromFolder(folder);
+}
+
 const BUCKET = "ticket-images";
 const DOWNLOAD_CONCURRENCY = 6;
 
@@ -58,55 +92,11 @@ async function listAllFileNames(
   return names;
 }
 
-export async function GET(req: Request) {
-  const url = new URL(req.url);
-  const folder = (url.searchParams.get("folder") ?? "").trim();
-  const zipObject = (url.searchParams.get("zipObject") ?? "").trim();
-
-  if (zipObject) {
-    if (!isAllowedZipObject(zipObject)) {
-      return new Response("Invalid ZIP object path", { status: 400 });
-    }
-    const admin = createAdminClient();
-    const { data, error } = await admin.storage.from(BUCKET).download(zipObject);
-    if (error || !data) {
-      return new Response(error?.message ?? "ZIP not found", { status: 404 });
-    }
-    const bytes = new Uint8Array(await data.arrayBuffer());
-    const baseName = zipObject
-      .split("/")
-      .filter(Boolean)
-      .slice(-1)[0]
-      ?.replace(/\.zip$/i, "") || "tickets";
-    return new Response(bytes, {
-      status: 200,
-      headers: {
-        "Content-Type": "application/zip",
-        "Content-Disposition": `attachment; filename="${baseName}.zip"`,
-        "Content-Length": String(bytes.byteLength),
-        "Cache-Control": "no-store",
-      },
-    });
-  }
-
-  if (!folder || !isAllowedFolder(folder)) {
-    return new Response("Invalid folder", { status: 400 });
-  }
-
-  const admin = createAdminClient();
-  let fileNames: string[];
-  try {
-    fileNames = await listAllFileNames(admin, folder);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "List failed";
-    return new Response(msg, { status: 500 });
-  }
-
-  if (fileNames.length === 0) {
-    return new Response("No ticket image files in this folder", { status: 404 });
-  }
-
-  const baseName = asciiFilenameFromFolder(folder);
+async function streamZipFromObjectPaths(
+  admin: ReturnType<typeof createAdminClient>,
+  objectPaths: string[],
+  baseName: string
+): Promise<Response> {
   const passthrough = new PassThrough();
   const archive = archiver("zip", { zlib: { level: 0 } });
   archive.on("error", (err) => {
@@ -116,14 +106,14 @@ export async function GET(req: Request) {
 
   void (async () => {
     try {
-      for (let i = 0; i < fileNames.length; i += DOWNLOAD_CONCURRENCY) {
-        const chunk = fileNames.slice(i, i + DOWNLOAD_CONCURRENCY);
+      for (let i = 0; i < objectPaths.length; i += DOWNLOAD_CONCURRENCY) {
+        const chunk = objectPaths.slice(i, i + DOWNLOAD_CONCURRENCY);
         const buffers = await Promise.all(
-          chunk.map(async (name) => {
-            const objectPath = `${folder}/${name}`;
+          chunk.map(async (objectPath) => {
             const { data, error } = await admin.storage.from(BUCKET).download(objectPath);
             if (error || !data) return null;
             const buf = Buffer.from(await data.arrayBuffer());
+            const name = objectPath.split("/").filter(Boolean).slice(-1)[0] ?? "ticket.png";
             return { name, buf };
           })
         );
@@ -151,4 +141,64 @@ export async function GET(req: Request) {
       "Cache-Control": "no-store",
     },
   });
+}
+
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const folder = (url.searchParams.get("folder") ?? "").trim();
+  const zipObject = (url.searchParams.get("zipObject") ?? "").trim();
+  const filePaths = parseFilesParam(url);
+
+  if (zipObject) {
+    if (!isAllowedZipObject(zipObject)) {
+      return new Response("Invalid ZIP object path", { status: 400 });
+    }
+    const admin = createAdminClient();
+    const { data, error } = await admin.storage.from(BUCKET).download(zipObject);
+    if (error || !data) {
+      return new Response(error?.message ?? "ZIP not found", { status: 404 });
+    }
+    const bytes = new Uint8Array(await data.arrayBuffer());
+    const baseName = zipObject
+      .split("/")
+      .filter(Boolean)
+      .slice(-1)[0]
+      ?.replace(/\.zip$/i, "") || "tickets";
+    return new Response(bytes, {
+      status: 200,
+      headers: {
+        "Content-Type": "application/zip",
+        "Content-Disposition": `attachment; filename="${baseName}.zip"`,
+        "Content-Length": String(bytes.byteLength),
+        "Cache-Control": "no-store",
+      },
+    });
+  }
+
+  const admin = createAdminClient();
+
+  if (filePaths.length > 0) {
+    const baseName = asciiFilenameFromObjectPaths(filePaths);
+    return streamZipFromObjectPaths(admin, filePaths, baseName);
+  }
+
+  if (!folder || !isAllowedFolder(folder)) {
+    return new Response("Invalid folder", { status: 400 });
+  }
+
+  let fileNames: string[];
+  try {
+    fileNames = await listAllFileNames(admin, folder);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "List failed";
+    return new Response(msg, { status: 500 });
+  }
+
+  if (fileNames.length === 0) {
+    return new Response("No ticket image files in this folder", { status: 404 });
+  }
+
+  const baseName = asciiFilenameFromFolder(folder);
+  const objectPaths = fileNames.map((name) => `${folder}/${name}`);
+  return streamZipFromObjectPaths(admin, objectPaths, baseName);
 }

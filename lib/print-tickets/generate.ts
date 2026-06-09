@@ -5,6 +5,10 @@ import { generateTicketImageForPrint } from "@/lib/ticket-image";
 import { buildEncryptedQrFromQrData, formatQrData } from "@/lib/qr-data";
 import { allocateUniquePrintQrData } from "@/lib/print-tickets/allocate-print-qr-data";
 import { ensureSeatEncryptedQrForSale } from "@/lib/event-seats/seat-encrypted-qr";
+import {
+  ensureInventoryForSeats,
+  generateInventoryImages,
+} from "@/lib/ticket-inventory";
 
 export type SupabaseClient = Awaited<ReturnType<typeof createClient>>;
 
@@ -94,6 +98,49 @@ async function resolvePrintTicketAfterInsertConflict(
   return null;
 }
 
+async function generateOneSeatLinked(
+  admin: AdminSupabaseClient,
+  eventId: string,
+  eventSectionId: string,
+  eventSeatId: string
+): Promise<GenerateOneResult> {
+  const ensured = await ensureInventoryForSeats(admin, eventId, [eventSeatId]);
+  const printTicketId = ensured.print_ticket_ids[0];
+  if (!printTicketId) {
+    return { ok: false, message: "Failed to ensure ticket inventory for seat" };
+  }
+
+  const { data: row } = await admin
+    .from("print_tickets")
+    .select("ticket_image_url")
+    .eq("id", printTicketId)
+    .single();
+
+  let ticketImageUrl = (row?.ticket_image_url as string | null) ?? "";
+  if (!ticketImageUrl.trim()) {
+    const img = await generateInventoryImages(admin, [printTicketId]);
+    if (img.images_generated < 1) {
+      return {
+        ok: false,
+        message:
+          "Ticket image render or storage upload failed. Check server logs, ticket template URL, and that the ticket-images bucket accepts uploads from the service role.",
+      };
+    }
+    const { data: after } = await admin
+      .from("print_tickets")
+      .select("ticket_image_url")
+      .eq("id", printTicketId)
+      .single();
+    ticketImageUrl = (after?.ticket_image_url as string) ?? "";
+  }
+
+  if (!ticketImageUrl.trim()) {
+    return { ok: false, message: "Ticket image URL missing after generation" };
+  }
+
+  return { ok: true, id: printTicketId, ticket_image_url: ticketImageUrl };
+}
+
 /**
  * @param sectionSlotIndex For `eventSeatId === null`: 1-based slot within section (required for new rows; defaults to 1 if omitted). Ignored when `eventSeatId` is set (stored as 0).
  */
@@ -116,21 +163,19 @@ export async function generateOne(
       };
     }
 
-    const slotForRow =
-      eventSeatId != null
-        ? 0
-        : Math.max(1, Math.floor(sectionSlotIndex ?? 1));
+    if (eventSeatId != null) {
+      return generateOneSeatLinked(admin, eventId, eventSectionId, eventSeatId);
+    }
 
-    let existingQuery = admin
+    const slotForRow = Math.max(1, Math.floor(sectionSlotIndex ?? 1));
+
+    const existingQuery = admin
       .from("print_tickets")
       .select("id, qr_data, encrypted_qr")
       .eq("event_id", eventId)
-      .eq("event_section_id", eventSectionId);
-
-    existingQuery =
-      eventSeatId != null
-        ? existingQuery.eq("event_seat_id", eventSeatId)
-        : existingQuery.is("event_seat_id", null).eq("section_slot_index", slotForRow);
+      .eq("event_section_id", eventSectionId)
+      .is("event_seat_id", null)
+      .eq("section_slot_index", slotForRow);
 
     const { data: existing, error: existingError } = await existingQuery.maybeSingle();
     if (existingError) {
@@ -147,42 +192,7 @@ export async function generateOne(
     if (existing) {
       printTicketId = existing.id;
       qrData = existing.qr_data;
-      if (eventSeatId) {
-        const [{ data: eventRowEx }, { data: sectionRowEx }, { data: seatRowEx }] =
-          await Promise.all([
-            supabase.from("events").select("event_code").eq("id", eventId).single(),
-            supabase
-              .from("event_sections")
-              .select("section_code")
-              .eq("id", eventSectionId)
-              .single(),
-            supabase
-              .from("event_seats")
-              .select("row_label, seat_number")
-              .eq("id", eventSeatId)
-              .single(),
-          ]);
-        const eventCodeEx =
-          (eventRowEx as { event_code?: string | null } | null)?.event_code ?? "XXX";
-        const sectionCodeEx =
-          (sectionRowEx as { section_code?: string | null } | null)?.section_code ?? "000";
-        const seatEnc = await ensureSeatEncryptedQrForSale(admin, eventSeatId, {
-          eventCode: eventCodeEx,
-          sectionCode: sectionCodeEx,
-          rowLabel: seatRowEx?.row_label ?? "-",
-          seatNumber: seatRowEx?.seat_number ?? "-",
-        });
-        encryptedQrData = seatEnc;
-        const prevEnc = (existing.encrypted_qr ?? "").trim().toUpperCase();
-        if (prevEnc !== seatEnc) {
-          await admin
-            .from("print_tickets")
-            .update({ encrypted_qr: seatEnc, ticket_image_url: null })
-            .eq("id", existing.id);
-        }
-      } else {
-        encryptedQrData = existing.encrypted_qr ?? buildEncryptedQrFromQrData(qrData);
-      }
+      encryptedQrData = existing.encrypted_qr ?? buildEncryptedQrFromQrData(qrData);
     } else {
       const { data: eventRow } = await supabase
         .from("events")
@@ -196,24 +206,10 @@ export async function generateOne(
         .eq("id", eventSectionId)
         .single();
 
-      let rowLabel = "-";
-      let seatNumber = "-";
-      if (eventSeatId) {
-        const { data: seatRow } = await supabase
-          .from("event_seats")
-          .select("row_label, seat_number")
-          .eq("id", eventSeatId)
-          .single();
-        if (seatRow) {
-          rowLabel = seatRow.row_label ?? "-";
-          seatNumber = seatRow.seat_number ?? "-";
-        }
-      } else {
-        const st = (sectionRow as { seating_type?: string | null } | null)?.seating_type ?? "";
-        const stNorm = st.toString().trim().toLowerCase();
-        rowLabel = stNorm === "standing" ? "ST" : "FS";
-        seatNumber = String(slotForRow);
-      }
+      const st = (sectionRow as { seating_type?: string | null } | null)?.seating_type ?? "";
+      const stNorm = st.toString().trim().toLowerCase();
+      const rowLabel = stNorm === "standing" ? "ST" : "FS";
+      const seatNumber = String(slotForRow);
 
       const eventCode = (eventRow as { event_code?: string | null } | null)?.event_code ?? "XXX";
       const sectionCode = (sectionRow as { section_code?: string | null } | null)?.section_code ?? "000";
@@ -225,31 +221,15 @@ export async function generateOne(
         seatNumber,
       });
 
-      const saleQr =
-        eventSeatId != null
-          ? await getConfirmedSaleQrForSeat(admin, eventId, eventSeatId)
-          : null;
-
-      qrData =
-        saleQr != null
-          ? saleQr
-          : await allocateUniquePrintQrData(admin, eventId, saleStyleBase);
-      encryptedQrData =
-        eventSeatId != null
-          ? await ensureSeatEncryptedQrForSale(admin, eventSeatId, {
-              eventCode,
-              sectionCode,
-              rowLabel,
-              seatNumber,
-            })
-          : buildEncryptedQrFromQrData(qrData);
+      qrData = await allocateUniquePrintQrData(admin, eventId, saleStyleBase);
+      encryptedQrData = buildEncryptedQrFromQrData(qrData);
 
       const { data: inserted, error: insertError } = await admin
         .from("print_tickets")
         .insert({
           event_id: eventId,
           event_section_id: eventSectionId,
-          event_seat_id: eventSeatId,
+          event_seat_id: null,
           section_slot_index: slotForRow,
           qr_data: qrData,
           encrypted_qr: encryptedQrData,
@@ -263,22 +243,14 @@ export async function generateOne(
             admin,
             eventId,
             eventSectionId,
-            eventSeatId,
+            null,
             slotForRow,
             qrData
           );
           if (recovered) {
             printTicketId = recovered.id;
             qrData = recovered.qr_data;
-            encryptedQrData =
-              eventSeatId != null
-                ? await ensureSeatEncryptedQrForSale(admin, eventSeatId, {
-                    eventCode,
-                    sectionCode,
-                    rowLabel,
-                    seatNumber,
-                  })
-                : buildEncryptedQrFromQrData(qrData);
+            encryptedQrData = buildEncryptedQrFromQrData(qrData);
           } else {
             return {
               ok: false,
@@ -299,27 +271,20 @@ export async function generateOne(
           qrData = inserted.qr_data;
         }
         encryptedQrData =
-          eventSeatId != null
-            ? await ensureSeatEncryptedQrForSale(admin, eventSeatId, {
-                eventCode,
-                sectionCode,
-                rowLabel,
-                seatNumber,
-              })
-            : typeof inserted.encrypted_qr === "string" && inserted.encrypted_qr.length > 0
-              ? inserted.encrypted_qr
-              : buildEncryptedQrFromQrData(qrData);
+          typeof inserted.encrypted_qr === "string" && inserted.encrypted_qr.length > 0
+            ? inserted.encrypted_qr
+            : buildEncryptedQrFromQrData(qrData);
       }
     }
 
     const url = await generateTicketImageForPrint({
       eventId,
       eventSectionId,
-      eventSeatId,
+      eventSeatId: null,
       printTicketId,
       qrData: encryptedQrData,
       ticketNumberData: qrData,
-      sectionSlotIndex: eventSeatId ? undefined : slotForRow,
+      sectionSlotIndex: slotForRow,
     });
 
     if (!url) {

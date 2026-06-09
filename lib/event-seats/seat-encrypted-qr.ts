@@ -132,6 +132,8 @@ export async function rotateEncryptedQrForSeatOnRelease(
       encrypted_qr: newEnc,
       qr_data: qrDataForPrint,
       ticket_image_url: null,
+      allocated_ticket_id: null,
+      allocated_at: null,
     })
     .eq("event_seat_id", seatId);
   if (ptErr) throw new Error(ptErr.message ?? "Failed to sync print_tickets after rotation");
