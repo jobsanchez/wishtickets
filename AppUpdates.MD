@@ -6,7 +6,7 @@ Changelog of app updates and edited files. Update this file whenever you edit pr
 
 ## 2026-06-11 – Inactivity PayMongo flow test coverage
 
-- `lib/inactivity-config.test.ts` – assert idle logout skipped when `in_paymongo_flow` is true
+- `lib/inactivity-config.test.ts` – asserts idle logout is skipped when `in_paymongo_flow` is true
 
 **Updates:** Regression test covers checkout/payment short-circuit alongside existing active-cart case.
 
