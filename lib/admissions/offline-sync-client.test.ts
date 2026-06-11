@@ -63,4 +63,35 @@ describe("okIdsFromSyncResults", () => {
   it("returns empty set for an empty results array", () => {
     expect(okIdsFromSyncResults([])).toEqual(new Set());
   });
+
+  it("returns empty set when results is undefined", () => {
+    expect(okIdsFromSyncResults(undefined)).toEqual(new Set());
+  });
+
+  it("includes ops with 2xx status and body.ok true", () => {
+    const results = [{ id: "ok1", httpStatus: 200, body: { ok: true } }];
+    expect(okIdsFromSyncResults(results)).toEqual(new Set(["ok1"]));
+  });
+
+  it("includes deduped ops as success", () => {
+    const results = [{ id: "dedup1", httpStatus: 500, body: { ok: false, deduped: true } }];
+    expect(okIdsFromSyncResults(results)).toEqual(new Set(["dedup1"]));
+  });
+
+  it("excludes failing ops", () => {
+    const results = [
+      { id: "fail-http", httpStatus: 500, body: { ok: false } },
+      { id: "fail-body", httpStatus: 200, body: { ok: false } },
+    ];
+    expect(okIdsFromSyncResults(results)).toEqual(new Set());
+  });
+
+  it("returns only successful ids from a mixed batch", () => {
+    const results = [
+      { id: "ok1", httpStatus: 200, body: { ok: true } },
+      { id: "dedup1", httpStatus: 409, body: { deduped: true } },
+      { id: "fail1", httpStatus: 500, body: { ok: false } },
+    ];
+    expect(okIdsFromSyncResults(results)).toEqual(new Set(["ok1", "dedup1"]));
+  });
 });

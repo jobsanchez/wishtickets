@@ -518,16 +518,20 @@ export default function AdmissionsScanPage() {
         }
 
         const syncResults = (j as { results?: SyncResultRow[] }).results;
-        const okIds = okIdsFromSyncResults(syncResults);
-        if (okIds.size > 0) {
-          await idbRemoveOutboxIds(Array.from(okIds));
-        } else if (Array.isArray(syncResults)) {
-          batchFailed = true;
-          batchErrorMessage =
-            "Server returned no successful admissions for this batch. Tap Upload to retry.";
-          break;
+
+        if (Array.isArray(syncResults)) {
+          const okIds = okIdsFromSyncResults(syncResults);
+          if (okIds.size > 0) {
+            await idbRemoveOutboxIds(Array.from(okIds));
+          } else {
+            // Per-op results array but none succeeded (empty array or all failures).
+            batchFailed = true;
+            batchErrorMessage =
+              "Server returned no successful admissions for this batch. Tap Upload to retry.";
+            break;
+          }
         } else {
-          // Legacy sync responses without per-op results: drop only this batch.
+          // Legacy responses without a results array: treat the whole batch as synced.
           await idbRemoveOutboxIds(batch.map((o) => o.id));
         }
 

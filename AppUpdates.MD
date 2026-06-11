@@ -4,6 +4,15 @@ Changelog of app updates and edited files. Update this file whenever you edit pr
 
 ---
 
+## 2026-06-11 – Admissions sync result handling clarity
+
+- `app/admissions/scan/page.tsx` – branch on `Array.isArray(syncResults)` before legacy batch removal
+- `lib/admissions/offline-sync-client.test.ts` – cover `okIdsFromSyncResults` success, deduped, failure, and mixed batches
+
+**Updates:** Per-op sync failures no longer share control flow with legacy no-results responses; result parsing tests document expected success criteria.
+
+---
+
 ## 2026-06-11 – Code review follow-ups (session, layout, admissions)
 
 - `app/auth/callback/route.ts` – fail OAuth redirect when session bootstrap fails
