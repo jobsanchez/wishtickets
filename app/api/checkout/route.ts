@@ -70,7 +70,7 @@ async function buildCheckoutEmailTicketAttachment(
   const qrPayload = t.encrypted_qr ?? t.qr_data;
   let imageUrlForExt: string | null = null;
 
-  let ticketImageUrl =
+  const ticketImageUrl =
     (await resolveTicketImageUrl(admin, t, {
       generateIfMissing: Boolean(t.print_ticket_id),
     })) ?? t.ticket_image_url;

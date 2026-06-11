@@ -66,11 +66,11 @@ export async function updateSession(request: NextRequest) {
   if (user) {
     const { data: sessionRow } = await supabase
       .from("user_session_activity")
-      .select("force_logout")
+      .select("logged_in,force_logout")
       .eq("profile_id", user.id)
       .maybeSingle();
 
-    if (sessionRow?.force_logout) {
+    if (sessionRow?.force_logout && sessionRow?.logged_in) {
       await supabase
         .from("user_session_activity")
         .upsert(

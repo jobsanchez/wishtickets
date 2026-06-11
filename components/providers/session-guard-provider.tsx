@@ -5,10 +5,11 @@ import { usePathname } from "next/navigation";
 import { useReservationStore } from "@/store/reservation-store";
 import { hasPendingPaymongoBooking } from "@/lib/paymongo-pending-booking";
 import { resyncAuthWithServer } from "@/lib/supabase/auth-resync";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 const NAV_DEBOUNCE_MS = 300;
-/** Keeps `last_heartbeat_at` fresh during long seat selection (server default inactivity is 5 min). */
-const HEARTBEAT_INTERVAL_MS = 60_000;
+/** Keeps `last_heartbeat_at` fresh during long seat selection (server default inactivity is 15 min). */
+const HEARTBEAT_INTERVAL_MS = 90_000;
 
 function isCartActive(cartId: string | null, expiresAt: string | null): boolean {
   if (!cartId || !expiresAt) return false;
@@ -40,6 +41,24 @@ function isInactivityExemptRoute(pathname: string): boolean {
   return pathname.startsWith("/admissions/scan");
 }
 
+type SessionActivityPayload = {
+  event: "heartbeat";
+  hasActiveCart: boolean;
+  inPaymongoFlow: boolean;
+};
+
+function buildActivityPayload(
+  pathname: string,
+  cartId: string | null,
+  expiresAt: string | null
+): SessionActivityPayload {
+  return {
+    event: "heartbeat",
+    hasActiveCart: hasActiveCartForSession(pathname, cartId, expiresAt),
+    inPaymongoFlow: isPaymongoFlow(pathname) || isInactivityExemptRoute(pathname),
+  };
+}
+
 export function SessionGuardProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() ?? "";
   const cartId = useReservationStore((s) => s.cartId);
@@ -48,7 +67,9 @@ export function SessionGuardProvider({ children }: { children: React.ReactNode }
   const sawAuthenticatedUserRef = useRef(false);
   const isLoggingOutRef = useRef(false);
   const syncBusyRef = useRef(false);
-  const runSessionGuardRef = useRef<(() => void) | null>(null);
+  const runFullSessionGuardRef = useRef<(() => void) | null>(null);
+  const runResumeGuardRef = useRef<(() => void) | null>(null);
+  const runActivityHeartbeatRef = useRef<(() => void) | null>(null);
 
   const pathnameRef = useRef(pathname);
   const cartIdRef = useRef(cartId);
@@ -69,13 +90,54 @@ export function SessionGuardProvider({ children }: { children: React.ReactNode }
 
     let cancelled = false;
 
-    const runSessionGuard = async () => {
+    async function postSessionActivity(): Promise<void> {
+      const currentPath = pathnameRef.current;
+      await fetch("/api/session/activity", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify(
+          buildActivityPayload(currentPath, cartIdRef.current, expiresAtRef.current)
+        ),
+      }).catch(() => {
+        /* best effort */
+      });
+    }
+
+    async function checkSessionStateAndMaybeLogout(supabase: SupabaseClient): Promise<boolean> {
+      const stateRes = await fetch("/api/session/state", {
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+
+      if (stateRes.status === 401 || stateRes.status === 403) return false;
+      if (!stateRes.ok) return false;
+
+      const body = (await stateRes.json()) as {
+        user?: { id: string } | null;
+        forceLogout?: boolean;
+      };
+
+      if (body.forceLogout) {
+        isLoggingOutRef.current = true;
+        const { hardAuthReset } = await import("@/lib/supabase/auth-hard-reset");
+        try {
+          await hardAuthReset(supabase);
+        } finally {
+          window.location.replace("/");
+        }
+        return false;
+      }
+
+      return Boolean(body.user);
+    }
+
+    const runFullSessionGuard = async () => {
       if (cancelled || isLoggingOutRef.current || syncBusyRef.current) return;
       syncBusyRef.current = true;
 
       try {
         const { createClient } = await import("@/lib/supabase/client");
-        const { hardAuthReset } = await import("@/lib/supabase/auth-hard-reset");
         if (cancelled) return;
 
         const supabase = createClient();
@@ -101,49 +163,10 @@ export function SessionGuardProvider({ children }: { children: React.ReactNode }
 
         if (!user) return;
 
-        const stateRes = await fetch("/api/session/state", {
-          credentials: "same-origin",
-          cache: "no-store",
-        });
+        const stillAuthed = await checkSessionStateAndMaybeLogout(supabase);
+        if (!stillAuthed || cancelled || isLoggingOutRef.current) return;
 
-        if (stateRes.status === 401 || stateRes.status === 403) return;
-        if (!stateRes.ok) return;
-
-        const body = (await stateRes.json()) as {
-          user?: { id: string } | null;
-          forceLogout?: boolean;
-        };
-
-        if (body.forceLogout) {
-          isLoggingOutRef.current = true;
-          try {
-            await hardAuthReset(supabase);
-          } finally {
-            window.location.replace("/");
-          }
-          return;
-        }
-
-        if (!body.user) return;
-
-        const currentPath = pathnameRef.current;
-        await fetch("/api/session/activity", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "same-origin",
-          body: JSON.stringify({
-            event: "heartbeat",
-            hasActiveCart: hasActiveCartForSession(
-              currentPath,
-              cartIdRef.current,
-              expiresAtRef.current
-            ),
-            inPaymongoFlow:
-              isPaymongoFlow(currentPath) || isInactivityExemptRoute(currentPath),
-          }),
-        }).catch(() => {
-          /* best effort */
-        });
+        await postSessionActivity();
       } catch {
         /* best effort */
       } finally {
@@ -151,13 +174,66 @@ export function SessionGuardProvider({ children }: { children: React.ReactNode }
       }
     };
 
-    runSessionGuardRef.current = () => {
-      void runSessionGuard();
+    const runResumeGuard = async () => {
+      if (cancelled || isLoggingOutRef.current || syncBusyRef.current) return;
+      syncBusyRef.current = true;
+
+      try {
+        const { createClient } = await import("@/lib/supabase/client");
+        if (cancelled) return;
+
+        const supabase = createClient();
+        const {
+          data: { user },
+          error,
+        } = await supabase.auth.getUser();
+
+        if (error?.message?.includes("Invalid Refresh Token")) {
+          await supabase.auth.signOut({ scope: "local" });
+          return;
+        }
+
+        if (!user) return;
+
+        sawAuthenticatedUserRef.current = true;
+
+        const stillAuthed = await checkSessionStateAndMaybeLogout(supabase);
+        if (!stillAuthed || cancelled || isLoggingOutRef.current) return;
+
+        await postSessionActivity();
+      } catch {
+        /* best effort */
+      } finally {
+        syncBusyRef.current = false;
+      }
+    };
+
+    const runActivityHeartbeat = async () => {
+      if (cancelled || isLoggingOutRef.current || !sawAuthenticatedUserRef.current) return;
+      if (syncBusyRef.current) return;
+
+      try {
+        await postSessionActivity();
+      } catch {
+        /* best effort */
+      }
+    };
+
+    runFullSessionGuardRef.current = () => {
+      void runFullSessionGuard();
+    };
+    runResumeGuardRef.current = () => {
+      void runResumeGuard();
+    };
+    runActivityHeartbeatRef.current = () => {
+      void runActivityHeartbeat();
     };
 
     return () => {
       cancelled = true;
-      runSessionGuardRef.current = null;
+      runFullSessionGuardRef.current = null;
+      runResumeGuardRef.current = null;
+      runActivityHeartbeatRef.current = null;
     };
   }, [mounted]);
 
@@ -170,7 +246,7 @@ export function SessionGuardProvider({ children }: { children: React.ReactNode }
       if (debounceTimer != null) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
         debounceTimer = null;
-        runSessionGuardRef.current?.();
+        runFullSessionGuardRef.current?.();
       }, NAV_DEBOUNCE_MS);
     };
 
@@ -186,13 +262,13 @@ export function SessionGuardProvider({ children }: { children: React.ReactNode }
 
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible") {
-        runSessionGuardRef.current?.();
+        runResumeGuardRef.current?.();
       }
     };
 
     const intervalId = window.setInterval(() => {
       if (document.visibilityState === "visible") {
-        runSessionGuardRef.current?.();
+        runActivityHeartbeatRef.current?.();
       }
     }, HEARTBEAT_INTERVAL_MS);
 

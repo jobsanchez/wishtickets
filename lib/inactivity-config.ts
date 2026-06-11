@@ -1,7 +1,7 @@
 export const INACTIVITY_ENABLED_KEY = "inactivity_auto_logout_enabled";
 export const INACTIVITY_MINUTES_KEY = "inactivity_auto_logout_minutes";
 export const DEFAULT_INACTIVITY_ENABLED = true;
-export const DEFAULT_INACTIVITY_MINUTES = 5;
+export const DEFAULT_INACTIVITY_MINUTES = 15;
 export const MIN_INACTIVITY_MINUTES = 1;
 export const MAX_INACTIVITY_MINUTES = 120;
 
@@ -21,6 +21,7 @@ export function getInactivityCutoffIso(minutes: number): string {
 }
 
 export function shouldForceInactivityLogout(row: {
+  logged_in?: boolean | null;
   force_logout?: boolean | null;
   has_active_cart?: boolean | null;
   in_paymongo_flow?: boolean | null;
@@ -28,6 +29,7 @@ export function shouldForceInactivityLogout(row: {
   last_heartbeat_at?: string | null;
 }, config: InactivityConfig): boolean {
   if (!config.enabled) return false;
+  if (!row.logged_in) return false;
   if (row.force_logout) return true;
   if (row.has_active_cart || row.in_paymongo_flow) return false;
   const activityMs = row.last_activity_at

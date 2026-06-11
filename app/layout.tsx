@@ -5,6 +5,7 @@ import { QueryProvider } from "@/components/providers/query-provider";
 import { ThemeProvider } from "@/components/providers/theme-provider";
 import { SessionGuardProvider } from "@/components/providers/session-guard-provider";
 import { AppChrome } from "@/components/app-chrome";
+import { ChunkLoadRecovery } from "@/components/chunk-load-recovery";
 import { WishBootShell } from "@/components/wish-boot-shell";
 import { getMetaPixelInjectConfig } from "@/lib/meta-pixel-config-server";
 import "./globals.css";
@@ -104,6 +105,12 @@ export default async function RootLayout({
             __html: `(function(){try{var k='theme';var t=localStorage.getItem(k);if(t!=='light'&&t!=='dark'){t=document.documentElement.getAttribute('data-theme')||'light';}document.documentElement.setAttribute('data-theme',t);localStorage.setItem(k,t);}catch(e){}})();`,
           }}
         />
+        <script
+          suppressHydrationWarning
+          dangerouslySetInnerHTML={{
+            __html: `(function(){var key='wish-chunk-reload:'+location.pathname;window.addEventListener('error',function(e){var m=e.message||'';if(!/Loading chunk|ChunkLoadError|Failed to fetch dynamically imported module/i.test(m))return;if(sessionStorage.getItem(key))return;sessionStorage.setItem(key,'1');location.reload();});setTimeout(function(){sessionStorage.removeItem(key);},15000);})();`,
+          }}
+        />
         {ENABLE_GOOGLE_ANALYTICS ? (
           <link rel="preconnect" href="https://www.google-analytics.com" crossOrigin="" />
         ) : null}
@@ -159,6 +166,7 @@ fbq('track', 'PageView');
             </noscript>
           </>
         ) : null}
+        <ChunkLoadRecovery />
         <WishBootShell />
         <div
           className="relative min-h-screen w-full"

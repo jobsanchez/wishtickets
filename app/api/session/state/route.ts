@@ -31,6 +31,7 @@ export async function GET() {
 
   const shouldForce = shouldForceInactivityLogout(
     {
+      logged_in: row?.logged_in ?? false,
       force_logout: row?.force_logout ?? false,
       has_active_cart: row?.has_active_cart ?? false,
       in_paymongo_flow: row?.in_paymongo_flow ?? false,

@@ -4,6 +4,61 @@ Changelog of app updates and edited files. Update this file whenever you edit pr
 
 ---
 
+## 2026-06-11 – Inactivity auto-logout timeout 15 minutes
+
+- `lib/inactivity-config.ts` – `DEFAULT_INACTIVITY_MINUTES` 5 → 15
+- `components/providers/session-guard-provider.tsx` – comment update
+- `supabase/migrations/00250_inactivity_timeout_15_minutes.sql` – update `app_config` seed value
+
+**Updates:** Users are signed out after 15 minutes without activity (or heartbeat), up from 5. Admins can still override in Session security settings.
+
+---
+
+## 2026-06-11 – Fix logout-upon-login session race
+
+- `lib/session/bootstrap-activity.ts` (new) – shared session row bootstrap after sign-in
+- `app/api/auth/login/route.ts` – use bootstrap helper; fail login if upsert fails
+- `app/auth/callback/route.ts` – bootstrap session activity after OAuth code exchange
+- `lib/inactivity-config.ts` – only enforce inactivity / force_logout when `logged_in` is true
+- `app/api/session/state/route.ts` – pass `logged_in` into inactivity check
+- `lib/supabase/middleware.ts` – sign out on `force_logout` only when `logged_in` is true
+- `components/providers/session-guard-provider.tsx` – full guard on nav/mount, resume check on visibility, heartbeat-only on interval (90s)
+
+**Updates:** Fresh logins no longer hit stale `user_session_activity` rows; OAuth bootstraps session state like password login; heartbeats no longer run auth resync or force-logout checks every tick.
+
+---
+
+## 2026-06-09 – Checkout return & refund policy modal
+
+- `components/legal/return-and-refund-policy-sections.tsx` (new) – shared policy sections
+- `components/legal/return-and-refund-policy-dialog.tsx` (new) – scrollable modal with Close
+- `app/[eventSlug]/checkout/checkout-content.tsx` – button on zero-payment checkout
+- `app/return-and-refund-policy/return-and-refund-policy-content.tsx` – reuse shared sections
+
+**Updates:** Checkout shows “Check our Return and Refund Policy” (all payment types) opening a readable modal.
+
+---
+
+## 2026-06-09 – Dev chunk load recovery
+
+- `components/chunk-load-recovery.tsx` (new) – one-time reload on stale `/_next/static/chunks` failures; unregister SW in development
+- `app/layout.tsx` – mount recovery helper
+
+**Updates:** Mitigates `ChunkLoadError` / layout chunk timeout after dev recompiles or stale service worker cache.
+
+---
+
+## 2026-06-09 – Return and Refund Policy page
+
+- `app/return-and-refund-policy/page.tsx`, `return-and-refund-policy-content.tsx` (new)
+- `components/footer.tsx` – link under Terms & Conditions
+- `components/header-mobile-menu.tsx` – mobile nav link
+- `app/sitemap.ts` – include new legal route
+
+**Updates:** New Return and Refund Policy page with outlet/online purchase, discount, refund, and dispute info; Terms and Privacy copy already matched provided text.
+
+---
+
 ## 2026-06-09 – CodeRabbit auth path instruction clarity
 
 - `.coderabbit.yaml` – lib/auth.ts instruction now flags both boolean-return helpers and unchecked call sites

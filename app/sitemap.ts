@@ -18,6 +18,7 @@ const STATIC_PATHS: {
   { path: "/contact", changeFrequency: "weekly", priority: 0.8 },
   { path: "/privacy-policy", changeFrequency: "monthly", priority: 0.5 },
   { path: "/terms-of-use", changeFrequency: "monthly", priority: 0.5 },
+  { path: "/return-and-refund-policy", changeFrequency: "monthly", priority: 0.5 },
 ];
 
 type EventRow = { slug?: string | null; updated_at?: string | null };
