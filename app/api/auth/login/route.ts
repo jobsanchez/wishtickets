@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { bootstrapSessionActivity } from "@/lib/session/bootstrap-activity";
 import { createClient } from "@/lib/supabase/server";
 import { looksLikeEmail, validateUsername } from "@/lib/auth/username";
 
@@ -95,21 +96,9 @@ export async function POST(request: NextRequest) {
       data: { user },
     } = await supabase.auth.getUser();
     if (user) {
-      const admin = createAdminClient();
-      const now = new Date().toISOString();
-      const { error: sessionActivityError } = await admin.from("user_session_activity").upsert(
-        {
-          profile_id: user.id,
-          logged_in: true,
-          force_logout: false,
-          updated_at: now,
-          last_activity_at: now,
-          last_heartbeat_at: now,
-        },
-        { onConflict: "profile_id" }
-      );
-      if (sessionActivityError) {
-        console.error("[auth login] session activity", sessionActivityError);
+      const bootstrap = await bootstrapSessionActivity(user.id);
+      if (!bootstrap.ok) {
+        return NextResponse.json({ error: "Unable to sign in right now." }, { status: 500 });
       }
     }
 

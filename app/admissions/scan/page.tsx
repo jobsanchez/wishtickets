@@ -8,7 +8,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/lib/toast";
 import { RefreshCw, FlipHorizontal, Download, Upload, Loader2 } from "lucide-react";
-import { FloatingProgressBar } from "@/components/ui/floating-progress";
+import {
+  FLOATING_PROGRESS_PRESETS,
+  FloatingProgressBar,
+} from "@/components/ui/floating-progress";
 import { cn } from "@/lib/utils";
 import { NavButtonWithProgress } from "@/components/ui/nav-button-with-progress";
 import { AlertDialog } from "@/components/ui/alert-dialog";
@@ -241,6 +244,7 @@ export default function AdmissionsScanPage() {
   const [listSearch, setListSearch] = useState("");
   const videoDimensionsRef = useRef<{ width: number; height: number } | null>(null);
   const scannerContainerRef = useRef<HTMLDivElement>(null);
+  const syncInFlightRef = useRef(false);
   const [scannerKey, setScannerKey] = useState(0);
   const [idbPack, setIdbPack] = useState<AdmissionsOfflinePackV1 | null>(null);
   const [pendingOutboxCount, setPendingOutboxCount] = useState(0);
@@ -279,6 +283,7 @@ export default function AdmissionsScanPage() {
     if (packDownloadBusy) {
       return {
         active: true as const,
+        ...FLOATING_PROGRESS_PRESETS.genericSave,
         message: "Saving offline ticket list",
         subtitle: session.event_title,
         detail:
@@ -289,6 +294,7 @@ export default function AdmissionsScanPage() {
     if (syncBusy) {
       return {
         active: true as const,
+        ...FLOATING_PROGRESS_PRESETS.uploading,
         message: "Uploading offline admissions",
         subtitle: session.event_title,
         detail: `Sending queued scans in batches of ${OFFLINE_SYNC_BATCH_SIZE}. Keep this tab open until this finishes.`,
@@ -450,25 +456,42 @@ export default function AdmissionsScanPage() {
 
   const syncOutbox = useCallback(async () => {
     if (!session) return;
-    let remaining = await idbListOutbox();
-    if (remaining.length === 0) {
-      setPendingOutboxCount(0);
-      await fetchRecords();
-      return;
-    }
-    const totalAtStart = remaining.length;
-    let batchFailed = false;
-    let batchErrorMessage: string | null = null;
+    if (syncInFlightRef.current) return;
+    syncInFlightRef.current = true;
 
-    setSyncBusy(true);
-    setSyncProgress(0);
-    setSyncComputable(false);
     try {
+      let remaining = await idbListOutbox();
+      if (remaining.length === 0) {
+        setPendingOutboxCount(0);
+        await fetchRecords();
+        return;
+      }
+      const totalAtStart = remaining.length;
+      let batchFailed = false;
+      let batchErrorMessage: string | null = null;
+
+      setSyncBusy(true);
+      setSyncProgress(0);
+      setSyncComputable(false);
+
       while (remaining.length > 0) {
         const opsDoneBeforeBatch = totalAtStart - remaining.length;
         const batch = remaining.slice(0, OFFLINE_SYNC_BATCH_SIZE);
-        const payload = { ops: outboxOpsToSyncPayload(batch, session.event_id) };
-        const batchSize = batch.length;
+        const { ops: syncOps, invalidOpIds } = outboxOpsToSyncPayload(batch, session.event_id);
+
+        if (invalidOpIds.length > 0) {
+          await idbRemoveOutboxIds(invalidOpIds);
+          remaining = await idbListOutbox();
+          if (syncOps.length === 0) {
+            setSyncProgress(
+              Math.min(99, Math.round(((totalAtStart - remaining.length) / totalAtStart) * 100))
+            );
+            continue;
+          }
+        }
+
+        const payload = { ops: syncOps };
+        const batchSize = syncOps.length;
 
         const { ok, data: j } = await postJsonWithUploadProgress<{
           ok?: boolean;
@@ -495,11 +518,20 @@ export default function AdmissionsScanPage() {
         }
 
         const syncResults = (j as { results?: SyncResultRow[] }).results;
-        const okIds = okIdsFromSyncResults(syncResults);
-        if (okIds.size > 0) {
-          await idbRemoveOutboxIds(Array.from(okIds));
-        } else if (!Array.isArray(syncResults)) {
-          // Legacy sync responses without per-op results: drop only this batch.
+
+        if (Array.isArray(syncResults)) {
+          const okIds = okIdsFromSyncResults(syncResults);
+          if (okIds.size > 0) {
+            await idbRemoveOutboxIds(Array.from(okIds));
+          } else {
+            // Per-op results array but none succeeded (empty array or all failures).
+            batchFailed = true;
+            batchErrorMessage =
+              "Server returned no successful admissions for this batch. Tap Upload to retry.";
+            break;
+          }
+        } else {
+          // Legacy responses without a results array: treat the whole batch as synced.
           await idbRemoveOutboxIds(batch.map((o) => o.id));
         }
 
@@ -545,11 +577,12 @@ export default function AdmissionsScanPage() {
       setOfflineBanner({
         tone: "error",
         message:
-          left.length < totalAtStart
+          left.length > 0
             ? `Upload interrupted. ${left.length} pending operation${left.length === 1 ? "" : "s"} remain — tap Upload to retry.`
             : "Could not sync. Try again when online.",
       });
     } finally {
+      syncInFlightRef.current = false;
       setSyncBusy(false);
       setSyncProgress(0);
       setSyncComputable(false);

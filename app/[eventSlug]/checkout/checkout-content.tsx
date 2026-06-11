@@ -48,6 +48,7 @@ import {
 } from "@/components/ui/dialog";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CartStayLongerDialog } from "@/components/booking/cart-stay-longer-dialog";
+import { ReturnAndRefundPolicyDialog } from "@/components/legal/return-and-refund-policy-dialog";
 import {
   computeChargedCentsForBucket,
   type PaymongoPaymentBucket,
@@ -254,6 +255,7 @@ export default function CheckoutContent({
   const [onSiteSubmitting, setOnSiteSubmitting] = useState(false);
   const [cancelCheckoutOpen, setCancelCheckoutOpen] = useState(false);
   const [prePaymongoOpen, setPrePaymongoOpen] = useState(false);
+  const [refundPolicyDialogOpen, setRefundPolicyDialogOpen] = useState(false);
   const [cartStayLongerDialogOpen, setCartStayLongerDialogOpen] = useState(false);
   const [isExtendingCart, setIsExtendingCart] = useState(false);
   const [paymentBucket, setPaymentBucket] = useState<PaymongoPaymentBucket | null>(null);
@@ -1570,6 +1572,14 @@ export default function CheckoutContent({
           </p>
         ) : null}
         <Button
+          type="button"
+          variant="outline"
+          className="w-full border-[var(--glass-border)] text-foreground hover:bg-[var(--glass-bg)]"
+          onClick={() => setRefundPolicyDialogOpen(true)}
+        >
+          Check our Return and Refund Policy
+        </Button>
+        <Button
           className="w-full bg-[var(--wish-yellow)] text-neutral-950 hover:bg-[#FFF9B8] hover:text-neutral-950"
           onClick={() => {
             if (finalCents === 0) {
@@ -1753,6 +1763,10 @@ export default function CheckoutContent({
             else toast.error("Could not confirm server cancellation. Cart was cleared locally.");
             router.push(`/${eventSlug}/book`);
           }}
+        />
+        <ReturnAndRefundPolicyDialog
+          open={refundPolicyDialogOpen}
+          onOpenChange={setRefundPolicyDialogOpen}
         />
         <NavButtonWithProgress
           href={`/${eventSlug}/book`}

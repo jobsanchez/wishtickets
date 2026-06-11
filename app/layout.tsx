@@ -5,6 +5,7 @@ import { QueryProvider } from "@/components/providers/query-provider";
 import { ThemeProvider } from "@/components/providers/theme-provider";
 import { SessionGuardProvider } from "@/components/providers/session-guard-provider";
 import { AppChrome } from "@/components/app-chrome";
+import { ChunkLoadRecovery } from "@/components/chunk-load-recovery";
 import { WishBootShell } from "@/components/wish-boot-shell";
 import { getMetaPixelInjectConfig } from "@/lib/meta-pixel-config-server";
 import "./globals.css";
@@ -159,6 +160,7 @@ fbq('track', 'PageView');
             </noscript>
           </>
         ) : null}
+        <ChunkLoadRecovery />
         <WishBootShell />
         <div
           className="relative min-h-screen w-full"

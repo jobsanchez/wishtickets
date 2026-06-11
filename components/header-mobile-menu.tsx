@@ -146,6 +146,12 @@ export function HeaderMobileMenu({
           Privacy Policy
         </Link>
       </DialogClose>
+      <DialogClose asChild>
+        <Link href="/return-and-refund-policy" className={navRow}>
+          <FileText className="h-4 w-4 shrink-0 opacity-90" aria-hidden />
+          Return &amp; Refund Policy
+        </Link>
+      </DialogClose>
     </>
   );
 

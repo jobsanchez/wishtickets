@@ -79,6 +79,14 @@ export function Footer() {
                   Terms of Use
                 </Link>
               </li>
+              <li>
+                <Link
+                  href="/return-and-refund-policy"
+                  className="inline-flex min-h-11 items-center py-2 -my-1 hover:text-[var(--wish-orange)] transition-colors"
+                >
+                  Return and Refund Policy
+                </Link>
+              </li>
             </ul>
           </div>
         </div>
