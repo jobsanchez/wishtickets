@@ -3,6 +3,9 @@ import type { OfflinePendingOpV1 } from "./offline-pack-types";
 /** Keep each sync request small enough for Netlify serverless timeouts. */
 export const OFFLINE_SYNC_BATCH_SIZE = 50;
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export type SyncOpPayload =
   | {
       id: string;
@@ -38,6 +41,7 @@ export function outboxOpsToSyncPayload(
       const releaseQty = o.release_quantity;
       if (
         bookingAddOnId &&
+        UUID_RE.test(bookingAddOnId) &&
         typeof releaseQty === "number" &&
         Number.isInteger(releaseQty) &&
         releaseQty >= 1

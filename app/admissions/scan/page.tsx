@@ -8,7 +8,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/lib/toast";
 import { RefreshCw, FlipHorizontal, Download, Upload, Loader2 } from "lucide-react";
-import { FloatingProgressBar } from "@/components/ui/floating-progress";
+import {
+  FLOATING_PROGRESS_PRESETS,
+  FloatingProgressBar,
+} from "@/components/ui/floating-progress";
 import { cn } from "@/lib/utils";
 import { NavButtonWithProgress } from "@/components/ui/nav-button-with-progress";
 import { AlertDialog } from "@/components/ui/alert-dialog";
@@ -280,6 +283,7 @@ export default function AdmissionsScanPage() {
     if (packDownloadBusy) {
       return {
         active: true as const,
+        ...FLOATING_PROGRESS_PRESETS.genericSave,
         message: "Saving offline ticket list",
         subtitle: session.event_title,
         detail:
@@ -290,6 +294,7 @@ export default function AdmissionsScanPage() {
     if (syncBusy) {
       return {
         active: true as const,
+        ...FLOATING_PROGRESS_PRESETS.uploading,
         message: "Uploading offline admissions",
         subtitle: session.event_title,
         detail: `Sending queued scans in batches of ${OFFLINE_SYNC_BATCH_SIZE}. Keep this tab open until this finishes.`,

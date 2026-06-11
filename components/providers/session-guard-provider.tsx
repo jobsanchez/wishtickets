@@ -183,6 +183,9 @@ export function SessionGuardProvider({ children }: { children: React.ReactNode }
         if (cancelled) return;
 
         const supabase = createClient();
+        await resyncAuthWithServer(supabase);
+        if (cancelled || isLoggingOutRef.current) return;
+
         const {
           data: { user },
           error,
@@ -193,9 +196,14 @@ export function SessionGuardProvider({ children }: { children: React.ReactNode }
           return;
         }
 
-        if (!user) return;
+        if (user) {
+          sawAuthenticatedUserRef.current = true;
+        } else if (sawAuthenticatedUserRef.current) {
+          window.location.reload();
+          return;
+        }
 
-        sawAuthenticatedUserRef.current = true;
+        if (!user) return;
 
         const stillAuthed = await checkSessionStateAndMaybeLogout(supabase);
         if (!stillAuthed || cancelled || isLoggingOutRef.current) return;
@@ -213,6 +221,13 @@ export function SessionGuardProvider({ children }: { children: React.ReactNode }
       if (syncBusyRef.current) return;
 
       try {
+        const { createClient } = await import("@/lib/supabase/client");
+        if (cancelled) return;
+
+        const supabase = createClient();
+        const stillAuthed = await checkSessionStateAndMaybeLogout(supabase);
+        if (!stillAuthed || cancelled || isLoggingOutRef.current) return;
+
         await postSessionActivity();
       } catch {
         /* best effort */

@@ -40,6 +40,13 @@ describe("outboxOpsToSyncPayload", () => {
         release_quantity: 0,
       },
       {
+        id: "bad-addon-uuid",
+        created_at: "2026-01-01T00:00:00.000Z",
+        mode: "release_add_on",
+        booking_add_on_id: "not-a-uuid",
+        release_quantity: 1,
+      },
+      {
         id: "good",
         created_at: "2026-01-01T00:00:00.000Z",
         mode: "re_entry",
@@ -47,7 +54,7 @@ describe("outboxOpsToSyncPayload", () => {
       },
     ];
     const { ops: valid, invalidOpIds } = outboxOpsToSyncPayload(ops, eventId);
-    expect(invalidOpIds).toEqual(["bad-admit", "bad-addon"]);
+    expect(invalidOpIds).toEqual(["bad-admit", "bad-addon", "bad-addon-uuid"]);
     expect(valid).toEqual([{ id: "good", qr_data: "QR", mode: "re_entry" }]);
   });
 });

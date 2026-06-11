@@ -15,7 +15,11 @@ export async function GET(request: Request) {
         data: { user },
       } = await supabase.auth.getUser();
       if (user) {
-        await bootstrapSessionActivity(user.id);
+        const bootstrap = await bootstrapSessionActivity(user.id);
+        if (!bootstrap.ok) {
+          console.error("[auth callback] session bootstrap failed", bootstrap.error);
+          return NextResponse.redirect(`${origin}/login?error=session_bootstrap_error`);
+        }
       }
       return NextResponse.redirect(`${origin}${next}`);
     }
