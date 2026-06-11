@@ -4,6 +4,25 @@ Changelog of app updates and edited files. Update this file whenever you edit pr
 
 ---
 
+## 2026-06-11 – Inactivity PayMongo flow test coverage
+
+- `lib/inactivity-config.test.ts` – asserts idle logout is skipped when `in_paymongo_flow` is true
+
+**Updates:** Regression test covers checkout/payment short-circuit alongside existing active-cart case.
+
+---
+
+## 2026-06-11 – Fix idle force-logout stuck session and activity 409 loop
+
+- `lib/inactivity-config.ts` – check `force_logout` before `logged_in` guard
+- `app/api/session/state/route.ts` – return `forceLogout` when timed idle OR stale `force_logout` flag
+- `components/providers/session-guard-provider.tsx` – handle activity 409 `force_logout` with hard auth reset
+- `lib/inactivity-config.test.ts` (new) – regression tests for stale force-logout and idle cases
+
+**Updates:** After inactivity sweeper sets `logged_in=false, force_logout=true`, returning to the tab now signs the user out instead of looping on `POST /api/session/activity 409`.
+
+---
+
 ## 2026-06-11 – Admissions sync result handling clarity
 
 - `app/admissions/scan/page.tsx` – branch on `Array.isArray(syncResults)` before legacy batch removal

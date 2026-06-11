@@ -90,18 +90,41 @@ export function SessionGuardProvider({ children }: { children: React.ReactNode }
 
     let cancelled = false;
 
-    async function postSessionActivity(): Promise<void> {
+    async function forceLogoutAndRedirect(supabase: SupabaseClient): Promise<void> {
+      if (isLoggingOutRef.current) return;
+      isLoggingOutRef.current = true;
+      const { hardAuthReset } = await import("@/lib/supabase/auth-hard-reset");
+      try {
+        await hardAuthReset(supabase);
+      } finally {
+        window.location.replace("/");
+      }
+    }
+
+    async function postSessionActivity(supabase: SupabaseClient): Promise<boolean> {
       const currentPath = pathnameRef.current;
-      await fetch("/api/session/activity", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify(
-          buildActivityPayload(currentPath, cartIdRef.current, expiresAtRef.current)
-        ),
-      }).catch(() => {
+      try {
+        const res = await fetch("/api/session/activity", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify(
+            buildActivityPayload(currentPath, cartIdRef.current, expiresAtRef.current)
+          ),
+        });
+
+        if (res.status === 409) {
+          const body = (await res.json().catch(() => ({}))) as { reason?: string };
+          if (body.reason === "force_logout") {
+            await forceLogoutAndRedirect(supabase);
+            return false;
+          }
+        }
+      } catch {
         /* best effort */
-      });
+      }
+
+      return true;
     }
 
     async function checkSessionStateAndMaybeLogout(supabase: SupabaseClient): Promise<boolean> {
@@ -119,13 +142,7 @@ export function SessionGuardProvider({ children }: { children: React.ReactNode }
       };
 
       if (body.forceLogout) {
-        isLoggingOutRef.current = true;
-        const { hardAuthReset } = await import("@/lib/supabase/auth-hard-reset");
-        try {
-          await hardAuthReset(supabase);
-        } finally {
-          window.location.replace("/");
-        }
+        await forceLogoutAndRedirect(supabase);
         return false;
       }
 
@@ -166,7 +183,8 @@ export function SessionGuardProvider({ children }: { children: React.ReactNode }
         const stillAuthed = await checkSessionStateAndMaybeLogout(supabase);
         if (!stillAuthed || cancelled || isLoggingOutRef.current) return;
 
-        await postSessionActivity();
+        const activityOk = await postSessionActivity(supabase);
+        if (!activityOk || cancelled || isLoggingOutRef.current) return;
       } catch {
         /* best effort */
       } finally {
@@ -208,7 +226,8 @@ export function SessionGuardProvider({ children }: { children: React.ReactNode }
         const stillAuthed = await checkSessionStateAndMaybeLogout(supabase);
         if (!stillAuthed || cancelled || isLoggingOutRef.current) return;
 
-        await postSessionActivity();
+        const activityOk = await postSessionActivity(supabase);
+        if (!activityOk || cancelled || isLoggingOutRef.current) return;
       } catch {
         /* best effort */
       } finally {
@@ -228,7 +247,7 @@ export function SessionGuardProvider({ children }: { children: React.ReactNode }
         const stillAuthed = await checkSessionStateAndMaybeLogout(supabase);
         if (!stillAuthed || cancelled || isLoggingOutRef.current) return;
 
-        await postSessionActivity();
+        await postSessionActivity(supabase);
       } catch {
         /* best effort */
       }
