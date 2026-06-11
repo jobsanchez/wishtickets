@@ -79,6 +79,22 @@ describe("shouldForceInactivityLogout", () => {
     ).toBe(false);
   });
 
+  it("returns false when user is in PayMongo checkout flow", () => {
+    expect(
+      shouldForceInactivityLogout(
+        {
+          logged_in: true,
+          force_logout: false,
+          has_active_cart: false,
+          in_paymongo_flow: true,
+          last_activity_at: staleTimestamp(60),
+          last_heartbeat_at: staleTimestamp(60),
+        },
+        enabledConfig
+      )
+    ).toBe(false);
+  });
+
   it("returns false when inactivity auto-logout is disabled", () => {
     expect(
       shouldForceInactivityLogout(
