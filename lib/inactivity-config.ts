@@ -29,8 +29,8 @@ export function shouldForceInactivityLogout(row: {
   last_heartbeat_at?: string | null;
 }, config: InactivityConfig): boolean {
   if (!config.enabled) return false;
-  if (!row.logged_in) return false;
   if (row.force_logout) return true;
+  if (!row.logged_in) return false;
   if (row.has_active_cart || row.in_paymongo_flow) return false;
   const activityMs = row.last_activity_at
     ? new Date(row.last_activity_at).getTime()

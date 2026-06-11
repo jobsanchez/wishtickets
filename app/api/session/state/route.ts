@@ -29,19 +29,19 @@ export async function GET() {
     .eq("profile_id", user.id)
     .maybeSingle();
 
-  const shouldForce = shouldForceInactivityLogout(
-    {
-      logged_in: row?.logged_in ?? false,
-      force_logout: row?.force_logout ?? false,
-      has_active_cart: row?.has_active_cart ?? false,
-      in_paymongo_flow: row?.in_paymongo_flow ?? false,
-      last_activity_at: row?.last_activity_at ?? null,
-      last_heartbeat_at: row?.last_heartbeat_at ?? null,
-    },
-    inactivity
-  );
+  const rowSnapshot = {
+    logged_in: row?.logged_in ?? false,
+    force_logout: row?.force_logout ?? false,
+    has_active_cart: row?.has_active_cart ?? false,
+    in_paymongo_flow: row?.in_paymongo_flow ?? false,
+    last_activity_at: row?.last_activity_at ?? null,
+    last_heartbeat_at: row?.last_heartbeat_at ?? null,
+  };
 
-  if (shouldForce && !row?.force_logout) {
+  const timedForce = shouldForceInactivityLogout(rowSnapshot, inactivity);
+  const forceLogout = timedForce || Boolean(row?.force_logout);
+
+  if (timedForce && !row?.force_logout) {
     await supabase
       .from("user_session_activity")
       .upsert(
@@ -58,7 +58,7 @@ export async function GET() {
   return NextResponse.json(
     {
       user: { id: user.id, email: user.email ?? null },
-      forceLogout: shouldForce,
+      forceLogout,
       inactivity,
     },
     { headers: NO_STORE }
