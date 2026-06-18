@@ -4,7 +4,6 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
   ChevronDown,
   ChevronRight,
-  Image as ImageIcon,
   Mail,
   Package,
   Trash2,
@@ -28,10 +27,6 @@ import {
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
-import {
-  CLIENT_PRINT_GEN_CONCURRENCY,
-  PRINT_GEN_SEQUENTIAL_UNDER,
-} from "@/lib/print-tickets/run-pool";
 import { cappedFreeStandingSlotCount } from "@/lib/print-tickets/free-standing-slot-cap";
 import { isFreeStandingSeatingType } from "@/lib/print-tickets/is-free-standing-section";
 import { parseVirtualPrintSlotSeatId } from "@/lib/print-tickets/virtual-print-slot-id";
@@ -69,31 +64,6 @@ function isAbortError(e: unknown): boolean {
       e.name === "AbortError") ||
     (e instanceof Error && e.name === "AbortError")
   );
-}
-
-function sleepMs(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/** After this many successful ticket images, reload print data from the server and pause briefly (memory / gateway breathing room). */
-const PRINT_GEN_SYNC_EVERY = 100;
-
-/** Retries transient 5xx / 429 so long bulk runs survive cold starts and short platform blips. */
-async function fetchPrintTicketGenerate(body: Record<string, unknown>): Promise<Response> {
-  const maxAttempts = 4;
-  let last: Response | null = null;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    last = await fetch("/api/admin/print-tickets/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (last.ok || last.status === 403 || last.status === 400) return last;
-    if (attempt === maxAttempts) return last;
-    if (last.status !== 429 && last.status < 500) return last;
-    await sleepMs(700 * attempt + Math.floor(Math.random() * 400));
-  }
-  return last!;
 }
 
 interface PrintTicketInfo {
@@ -159,7 +129,6 @@ export function PrintTicketsTab({ eventId }: PrintTicketsTabProps) {
   const sectionsRef = useRef<SectionItem[]>([]);
   const [loadWarning, setLoadWarning] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [generating, setGenerating] = useState<string | null>(null);
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
@@ -177,9 +146,6 @@ export function PrintTicketsTab({ eventId }: PrintTicketsTabProps) {
     subtitle?: string;
     detail?: string;
   } | null>(null);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [emailSelectedItems, setEmailSelectedItems] = useState<Set<string>>(new Set());
   const [resultDialog, setResultDialog] = useState<{
     title: string;
@@ -190,8 +156,6 @@ export function PrintTicketsTab({ eventId }: PrintTicketsTabProps) {
   /** After first successful load for `eventId`, all groups start collapsed (name in set = collapsed). */
   const initialGroupCollapseAppliedForEventRef = useRef<string | null>(null);
 
-  /** User clicked Stop during in-page generation. */
-  const stopPrintGenerationRef = useRef(false);
   const sendAbortControllerRef = useRef<AbortController | null>(null);
   /** Polling for async print-email jobs (`send-all-selected`). */
   const sendPollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -199,7 +163,6 @@ export function PrintTicketsTab({ eventId }: PrintTicketsTabProps) {
   const sendEstimateTotalSecRef = useRef(0);
   const sendSubmitInFlightRef = useRef(false);
   const [sendElapsedSec, setSendElapsedSec] = useState(0);
-  const [generateElapsedSec, setGenerateElapsedSec] = useState(0);
   /** Free/standing “Jump to slot” select value per section (slot number string). */
   const [printSlotJump, setPrintSlotJump] = useState<Record<string, string>>({});
   const [zipStatusBySection, setZipStatusBySection] = useState<Record<string, SectionZipStatus>>({});
@@ -221,13 +184,6 @@ export function PrintTicketsTab({ eventId }: PrintTicketsTabProps) {
     const id = setInterval(() => setSendElapsedSec((s) => s + 1), 1000);
     return () => clearInterval(id);
   }, [sendingId, progress?.message]);
-
-  useEffect(() => {
-    if (generating !== "selected") return;
-    setGenerateElapsedSec(0);
-    const id = setInterval(() => setGenerateElapsedSec((s) => s + 1), 1000);
-    return () => clearInterval(id);
-  }, [generating]);
 
   const clearSendPollInterval = useCallback(() => {
     if (sendPollIntervalRef.current != null) {
@@ -435,41 +391,6 @@ export function PrintTicketsTab({ eventId }: PrintTicketsTabProps) {
     });
   }, []);
 
-  const toggleSectionSelection = useCallback(
-    (sectionId: string, isAssigned: boolean, seats: SeatItem[]) => {
-      setSelectedItems((prev) => {
-        const next = new Set(prev);
-        const useSeatRows = isAssigned || seats.length > 0;
-        if (useSeatRows) {
-          const pending = seats.filter((s) => !s.printTicket?.ticket_image_url);
-          const allSelected =
-            pending.length > 0 && pending.every((s) => next.has(`seat-${s.id}`));
-          if (allSelected) {
-            pending.forEach((s) => next.delete(`seat-${s.id}`));
-          } else {
-            pending.forEach((s) => next.add(`seat-${s.id}`));
-          }
-        } else {
-          const key = `section-${sectionId}`;
-          if (next.has(key)) next.delete(key);
-          else next.add(key);
-        }
-        return next;
-      });
-    },
-    []
-  );
-
-  const toggleSeatSelection = useCallback((seatId: string) => {
-    setSelectedItems((prev) => {
-      const next = new Set(prev);
-      const key = `seat-${seatId}`;
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }, []);
-
   const toggleSeatEmailSelection = useCallback((seatId: string) => {
     setEmailSelectedItems((prev) => {
       const next = new Set(prev);
@@ -501,272 +422,24 @@ export function PrintTicketsTab({ eventId }: PrintTicketsTabProps) {
     []
   );
 
-  const handleStopGeneration = useCallback(async () => {
-    stopPrintGenerationRef.current = true;
-    setGenerating(null);
-    setProgress(null);
-    toast.info("Stopped. Tickets already generated are kept.");
-    void fetchData();
-  }, [fetchData]);
-
-  const handleGenerateSelected = useCallback(async () => {
-    if (selectedItems.size === 0) return;
-
-    stopPrintGenerationRef.current = false;
-
-    const items: Array<{
-      sectionId: string;
-      seatId: string | null;
-      sectionSlotIndex?: number;
-    }> = [];
-    for (const key of selectedItems) {
-      if (key.startsWith("section-")) {
-        const sectionId = key.slice("section-".length);
-        items.push({ sectionId, seatId: null });
-      } else if (key.startsWith("seat-")) {
-        const id = key.slice("seat-".length);
-        const virtual = parseVirtualPrintSlotSeatId(id);
-        if (virtual) {
-          items.push({
-            sectionId: virtual.sectionId,
-            seatId: null,
-            sectionSlotIndex: virtual.slot,
-          });
-          continue;
-        }
-        const sec = sections.find((s) => s.seats.some((se) => se.id === id));
-        if (!sec) continue;
-        const assigned = !isFreeStandingSeatingType(sec.seating_type);
-        if (assigned) {
-          items.push({ sectionId: sec.id, seatId: id });
-        } else {
-          const seatRow = sec.seats.find((se) => se.id === id);
-          const slot = parseInt(seatRow?.seat_number ?? "1", 10);
-          items.push({
-            sectionId: sec.id,
-            seatId: null,
-            sectionSlotIndex: Number.isFinite(slot) && slot >= 1 ? slot : 1,
-          });
-        }
-      }
-    }
-
-    if (items.length === 0) {
-      toast.error("Nothing to generate");
-      return;
-    }
-
-    setGenerating("selected");
-    setProgress({
-      percent: 0,
-      message: "Generating tickets…",
-      subtitle: "Print tickets",
-      detail: "Starting generation. Images are created on the server in batches.",
-    });
-
-    try {
-      const total = items.length;
-      let successCount = 0;
-      let showedError = false;
-      /** Count 5xx after retries; surfaced in UI without per-request error toasts or console spam from our side. */
-      let serverErrorCount = 0;
-      let processed = 0;
-      let lastSyncedMilestone = 0;
-      const conc =
-        total < PRINT_GEN_SEQUENTIAL_UNDER ? 1 : CLIENT_PRINT_GEN_CONCURRENCY;
-      for (let off = 0; off < items.length; off += conc) {
-        if (stopPrintGenerationRef.current) {
-          if (successCount > 0) {
-            toast.info(`Stopped after ${successCount} ticket(s). Generated images are saved.`);
-            void fetchData();
-          } else {
-            toast.info("Stopped.");
-          }
-          setGenerating(null);
-          setProgress(null);
-          return;
-        }
-        const wave = items.slice(off, off + conc);
-        const results = await Promise.all(
-          wave.map(async ({ sectionId, seatId, sectionSlotIndex }) => {
-            if (stopPrintGenerationRef.current) {
-              return { ok: false as const, generated: 0, forbidden: false as const, err: false as const };
-            }
-            const res = await fetchPrintTicketGenerate({
-              eventId,
-              eventSectionId: sectionId,
-              eventSeatId: seatId,
-              sectionSlotIndex,
-              generateAllSeats: seatId === null && sectionSlotIndex === undefined,
-            });
-            const data = (await res.json().catch(() => ({}))) as {
-              generated?: number;
-              error?: string;
-            };
-            if (res.status === 403) {
-              return { ok: false as const, generated: 0, forbidden: true as const, err: false as const };
-            }
-            if (res.ok) {
-              return {
-                ok: true as const,
-                generated: typeof data.generated === "number" ? data.generated : 1,
-                forbidden: false as const,
-                err: false as const,
-              };
-            }
-            const serverError = res.status >= 500;
-            return {
-              ok: false as const,
-              generated: 0,
-              forbidden: false as const,
-              err: true as const,
-              serverError,
-              message: data.error,
-            };
-          })
-        );
-        let forbiddenWave = false;
-        for (const r of results) {
-          if (r.forbidden) {
-            toast.error("You don't have permission");
-            showedError = true;
-            forbiddenWave = true;
-            break;
-          }
-          if (r.ok) successCount += r.generated;
-          else if ("err" in r && r.err && "serverError" in r && r.serverError) {
-            serverErrorCount += 1;
-            const detail =
-              "message" in r && typeof r.message === "string" && r.message.trim() ? r.message.trim() : "";
-            if (serverErrorCount === 1) {
-              if (detail) {
-                toast.error(detail, { duration: 20000 });
-              } else {
-                toast.error(
-                  "Print generation failed (HTTP 500). Check the dev terminal for [print-tickets/generate] logs.",
-                  { duration: 15000 }
-                );
-              }
-            }
-          } else if ("err" in r && r.err && !showedError) {
-            toast.error(r.message ?? "Failed to generate ticket");
-            showedError = true;
-          }
-        }
-        if (stopPrintGenerationRef.current) {
-          if (successCount > 0) {
-            toast.info(`Stopped after ${successCount} ticket(s). Generated images are saved.`);
-            void fetchData();
-          } else {
-            toast.info("Stopped.");
-          }
-          setGenerating(null);
-          setProgress(null);
-          return;
-        }
-        if (forbiddenWave) break;
-        processed += wave.length;
-        const p = total > 0 ? Math.round((Math.min(processed, total) / total) * 100) : 0;
-
-        while (successCount >= lastSyncedMilestone + PRINT_GEN_SYNC_EVERY) {
-          if (stopPrintGenerationRef.current) break;
-          lastSyncedMilestone += PRINT_GEN_SYNC_EVERY;
-          setProgress({
-            percent: p,
-            message: "Syncing progress…",
-            subtitle: `${lastSyncedMilestone} generated`,
-            detail: [
-              "Refreshing this list from the server, then continuing…",
-              serverErrorCount > 0
-                ? `${serverErrorCount} server error${serverErrorCount === 1 ? "" : "s"} so far`
-                : null,
-            ]
-              .filter(Boolean)
-              .join("\n"),
-          });
-          await fetchData({ soft: true });
-          await sleepMs(1200);
-        }
-        if (stopPrintGenerationRef.current) {
-          if (successCount > 0) {
-            toast.info(`Stopped after ${successCount} ticket(s). Generated images are saved.`);
-            void fetchData();
-          } else {
-            toast.info("Stopped.");
-          }
-          setGenerating(null);
-          setProgress(null);
-          return;
-        }
-
-        setProgress({
-          percent: p,
-          message: "Generating tickets…",
-          subtitle: `${Math.min(processed, total)} of ${total}`,
-          detail:
-            serverErrorCount > 0
-              ? `${serverErrorCount} server error${serverErrorCount === 1 ? "" : "s"} — run continues`
-              : "Rendering each ticket image on the server.",
-        });
-      }
-      if (successCount > 0) {
-        toast.success(successCount > 1 ? `Generated ${successCount} tickets` : "Ticket generated");
-        if (serverErrorCount > 0) {
-          toast.info(
-            `${serverErrorCount} request${serverErrorCount === 1 ? "" : "s"} failed with a server error. Refresh the page and retry any seats that still need images.`,
-            { duration: 10000 }
-          );
-        }
-        setResultDialog({
-          title: "Ticket generation complete",
-          description:
-            serverErrorCount > 0
-              ? successCount > 1
-                ? `Generated ${successCount} tickets. ${serverErrorCount} request(s) hit a server error — use Refresh page if the list looks stale, then retry failed rows.`
-                : `Generated 1 ticket. ${serverErrorCount} request(s) hit a server error — refresh if needed, then retry failed rows.`
-              : successCount > 1
-                ? `Generated ${successCount} tickets successfully.`
-                : "Generated 1 ticket successfully.",
-        });
-        setSelectedItems(new Set());
-        fetchData();
-      } else if (!showedError) {
-        toast.error(
-          serverErrorCount > 0
-            ? "Generation failed due to server errors. Try Refresh page, then generate again."
-            : "Generation failed"
-        );
-      }
-      setGenerating(null);
-      setProgress(null);
-    } catch {
-      toast.error("Failed to generate tickets");
-      setGenerating(null);
-      setProgress(null);
-    }
-  }, [eventId, fetchData, sections, selectedItems]);
-
-  const hasSelection = selectedItems.size > 0;
   const emailSelectedCount = emailSelectedItems.size;
   const hasEmailSelection = emailSelectedCount > 0;
-  const allGenerateSelectableKeys = useMemo(() => {
-    const keys: string[] = [];
+  const inventorySummary = useMemo(() => {
+    let ready = 0;
+    let total = 0;
     for (const sec of sections) {
       const isAssigned = !isFreeStandingSeatingType(sec.seating_type);
-      const freeCap = freeStandingSlotTotal(sec);
-      if (isAssigned || sec.seats.length > 0) {
-        for (const seat of sec.seats) {
-          if (!seat.printTicket?.ticket_image_url) keys.push(`seat-${seat.id}`);
-        }
-      } else if (freeCap > 0) {
-        keys.push(`section-${sec.id}`);
-      }
+      const seatTotal =
+        sec.summaryCounts?.seatCount ??
+        (isAssigned ? sec.seats.length : freeStandingSlotTotal(sec));
+      const generated =
+        sec.summaryCounts?.generatedCount ??
+        sec.seats.filter((s) => !!s.printTicket?.ticket_image_url).length;
+      total += seatTotal;
+      ready += generated;
     }
-    return keys;
+    return { ready, total, missing: Math.max(0, total - ready) };
   }, [sections]);
-  const allGenerateSelected =
-    allGenerateSelectableKeys.length > 0 &&
-    allGenerateSelectableKeys.every((k) => selectedItems.has(k));
   const collapsibleSectionIds = useMemo(
     () =>
       sections
@@ -809,19 +482,6 @@ export function PrintTicketsTab({ eventId }: PrintTicketsTabProps) {
       return next.size === prev.size ? prev : next;
     });
   }, [sectionsByGroup]);
-
-  const toggleSelectAllGenerate = useCallback(() => {
-    if (allGenerateSelectableKeys.length === 0) return;
-    setSelectedItems((prev) => {
-      const next = new Set(prev);
-      if (allGenerateSelected) {
-        allGenerateSelectableKeys.forEach((k) => next.delete(k));
-      } else {
-        allGenerateSelectableKeys.forEach((k) => next.add(k));
-      }
-      return next;
-    });
-  }, [allGenerateSelectableKeys, allGenerateSelected]);
 
   const toggleAllSectionsCollapse = useCallback(() => {
     if (collapsibleSectionIds.length === 0) return;
@@ -895,18 +555,8 @@ export function PrintTicketsTab({ eventId }: PrintTicketsTabProps) {
         }
         const sec = sections.find((s) => s.seats.some((se) => se.id === id));
         if (!sec) continue;
-        const assigned = !isFreeStandingSeatingType(sec.seating_type);
-        if (assigned) {
-          items.push({ sectionId: sec.id, seatId: id });
-        } else {
-          const seatRow = sec.seats.find((se) => se.id === id);
-          const slot = parseInt(seatRow?.seat_number ?? "1", 10);
-          items.push({
-            sectionId: sec.id,
-            seatId: null,
-            sectionSlotIndex: Number.isFinite(slot) && slot >= 1 ? slot : 1,
-          });
-        }
+        // Physical seats (assigned + FCFS) and print_ticket row ids resolve via seatId.
+        items.push({ sectionId: sec.id, seatId: id });
       }
     }
     if (items.length === 0) return;
@@ -1206,40 +856,6 @@ export function PrintTicketsTab({ eventId }: PrintTicketsTabProps) {
     }
   }, [sendDialog, recipientEmail, eventId, sections]);
 
-  const handleDeleteAll = useCallback(async () => {
-    setDeleting(true);
-    setProgress({
-      percent: 0,
-      message: "Deleting tickets…",
-      subtitle: "Print tickets",
-      detail: FLOATING_PROGRESS_PRESETS.deleting.detail,
-    });
-    try {
-      const res = await fetch(`/api/admin/events/${eventId}/print-tickets`, {
-        method: "DELETE",
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.status === 403) {
-        toast.error("You don't have permission");
-        return;
-      }
-      if (!res.ok) {
-        toast.error(data.error ?? "Failed to delete tickets");
-        return;
-      }
-      const count = typeof data.deleted === "number" ? data.deleted : 0;
-      toast.success(count > 0 ? `Deleted ${count} generated tickets` : "No tickets to delete");
-      setSelectedItems(new Set());
-      fetchData();
-    } catch {
-      toast.error("Failed to delete tickets");
-    } finally {
-      setDeleting(false);
-      setProgress(null);
-      setDeleteDialogOpen(false);
-    }
-  }, [eventId, fetchData]);
-
   const enqueueZipJobs = useCallback(
     async (opts: { mode: "single" | "all"; sectionId?: string; overwrite?: boolean }) => {
       setZipBusy({
@@ -1398,14 +1014,7 @@ export function PrintTicketsTab({ eventId }: PrintTicketsTabProps) {
     [eventId, fetchZipStatuses]
   );
 
-  const hasGeneratedTickets = sections.some(
-    (s) =>
-      (s.summaryCounts?.generatedCount ?? 0) > 0 ||
-      s.seats.some((seat) => seat.printTicket?.ticket_image_url)
-  );
-
-  const busy =
-    loading || generating !== null || sendingId !== null || deleting || zipBusy !== null;
+  const busy = loading || sendingId !== null || zipBusy !== null;
 
   const printTicketsBarProps = useMemo(() => {
     if (loading) {
@@ -1414,14 +1023,6 @@ export function PrintTicketsTab({ eventId }: PrintTicketsTabProps) {
         subtitle: "Print tickets",
         detail: FLOATING_PROGRESS_PRESETS.genericLoad.detail,
         percent: undefined,
-      };
-    }
-    if (deleting) {
-      return {
-        message: progress?.message ?? "Deleting tickets…",
-        subtitle: progress?.subtitle ?? "Print tickets",
-        detail: progress?.detail ?? FLOATING_PROGRESS_PRESETS.deleting.detail,
-        percent: progress?.percent,
       };
     }
     if (zipBusy !== null) {
@@ -1459,14 +1060,6 @@ export function PrintTicketsTab({ eventId }: PrintTicketsTabProps) {
         detail = [detail, `Elapsed ${formatMmSs(sendElapsedSec)}`]
           .filter(Boolean)
           .join("\n");
-      } else if (
-        generating === "selected" &&
-        (progress.message === "Generating tickets…" ||
-          progress.message === "Syncing progress…")
-      ) {
-        detail = [detail, `Elapsed ${formatMmSs(generateElapsedSec)}`]
-          .filter(Boolean)
-          .join("\n");
       }
       return {
         message: progress.message,
@@ -1481,17 +1074,7 @@ export function PrintTicketsTab({ eventId }: PrintTicketsTabProps) {
       detail: FLOATING_PROGRESS_PRESETS.genericLoad.detail,
       percent: undefined,
     };
-  }, [
-    loading,
-    deleting,
-    zipBusy,
-    sections,
-    progress,
-    sendingId,
-    generating,
-    sendElapsedSec,
-    generateElapsedSec,
-  ]);
+  }, [loading, zipBusy, sections, progress, sendingId, sendElapsedSec]);
 
   /** Close recipient dialogs while the floating “Sending email…” overlay is active so they do not stack visually. */
   const hideSendDialogsForEmailProgress =
@@ -1522,23 +1105,7 @@ export function PrintTicketsTab({ eventId }: PrintTicketsTabProps) {
         detail={printTicketsBarProps.detail}
         percent={printTicketsBarProps.percent}
         footer={
-          generating === "selected" &&
-          (progress?.message === "Generating tickets…" || progress?.message === "Syncing progress…") ? (
-            <div className="flex max-w-md flex-col items-center gap-3 px-2">
-              <p className="text-center text-xs leading-relaxed text-amber-900 dark:text-amber-100/95">
-                Do not close this window or tab. Closing it will disrupt ticket generation and stop the process.
-              </p>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="border-white/30 bg-white/10 text-foreground hover:bg-white/15"
-                onClick={() => void handleStopGeneration()}
-              >
-                Stop generation
-              </Button>
-            </div>
-          ) : sendingId !== null && progress?.message === "Sending email…" ? (
+          sendingId !== null && progress?.message === "Sending email…" ? (
             <Button
               type="button"
               variant="outline"
@@ -1553,14 +1120,12 @@ export function PrintTicketsTab({ eventId }: PrintTicketsTabProps) {
       />
       <h2 className="text-lg font-semibold text-foreground mb-2">Print Tickets</h2>
       <p className="text-sm text-foreground-muted mb-2">
-        Generate ticket images for sections or seats without marking them sold. Send tickets via email for printing.
+        Package and email pre-generated ticket images from Seat Configurator. Tickets are not sold from this tab.
       </p>
       <p className="text-xs text-foreground-muted mb-4 max-w-3xl leading-relaxed">
-        Pre-print rows live in <code className="text-foreground/90">print_tickets</code> (generate from Seat
-        Configurator or top up here). Buyer sales allocate from that inventory when available. Free/standing slot
-        lists are capped by{" "}
-        <code className="text-foreground/90">MAX_FREE_STANDING_PRINT_SLOTS</code> on the server (defaults to 2000 if
-        unset).
+        Ticket inventory lives in <code className="text-foreground/90">print_tickets</code> — generate seats and ticket
+        images in <strong>Seat Configurator</strong> first, then zip or email from here. Buyer sales and manual
+        distribution allocate from the same inventory.
       </p>
       {loadWarning && (
         <div
@@ -1572,28 +1137,15 @@ export function PrintTicketsTab({ eventId }: PrintTicketsTabProps) {
       )}
       <div className="glass rounded-xl border border-[var(--glass-border)] p-6">
         <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div
-            role="button"
-            tabIndex={busy || allGenerateSelectableKeys.length === 0 ? -1 : 0}
-            className="inline-flex items-center gap-2 text-sm text-foreground-muted hover:text-foreground"
-            onClick={toggleSelectAllGenerate}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                toggleSelectAllGenerate();
-              }
-            }}
-            aria-disabled={busy || allGenerateSelectableKeys.length === 0}
-          >
-            <Checkbox
-              checked={allGenerateSelected}
-              className="data-[state=checked]:bg-[var(--wish-orange)] data-[state=checked]:border-[var(--wish-orange)]"
-            />
-            Select all for generation
-          </div>
-          <span className="self-end text-xs text-foreground-muted tabular-nums sm:self-auto">
-            {allGenerateSelectableKeys.length} pending
-          </span>
+          <p className="text-sm text-foreground-muted tabular-nums">
+            {inventorySummary.ready} / {inventorySummary.total} tickets ready
+            {inventorySummary.missing > 0 && (
+              <span className="text-amber-700 dark:text-amber-300">
+                {" "}
+                · {inventorySummary.missing} missing — generate in Seat Configurator
+              </span>
+            )}
+          </p>
         </div>
         <div className="mb-3 flex justify-end">
           <Button
@@ -1608,16 +1160,6 @@ export function PrintTicketsTab({ eventId }: PrintTicketsTabProps) {
           </Button>
         </div>
         <div className="mb-4 flex flex-col items-center gap-2 sm:flex-row sm:flex-wrap sm:justify-center">
-          <Button
-            size="sm"
-            variant="secondary"
-            className="w-full justify-center text-[var(--wish-orange)] border border-[var(--wish-orange)]/30 bg-[var(--wish-orange)]/10 hover:bg-[var(--wish-orange)]/15 sm:w-auto"
-            onClick={handleGenerateSelected}
-            disabled={!hasSelection || busy}
-          >
-            <ImageIcon className="h-4 w-4 mr-1" />
-            Generate
-          </Button>
           <Button
             size="sm"
             variant="secondary"
@@ -1657,16 +1199,6 @@ export function PrintTicketsTab({ eventId }: PrintTicketsTabProps) {
           >
             <Trash2 className="h-4 w-4 mr-1" />
             Delete all ZIPs
-          </Button>
-          <Button
-            variant="destructive"
-            size="sm"
-            className="w-full justify-center sm:w-auto"
-            onClick={() => setDeleteDialogOpen(true)}
-            disabled={!hasGeneratedTickets || deleting || generating !== null || sendingId !== null}
-          >
-            <Trash2 className="h-4 w-4 mr-1" />
-            Delete all generated tickets
           </Button>
         </div>
         {sections.length === 0 ? (
@@ -1735,29 +1267,16 @@ export function PrintTicketsTab({ eventId }: PrintTicketsTabProps) {
                         ? "Failed"
                         : "No ZIP";
 
-              /** Orange “Generate” selection count vs total seats or capped free/standing slots. */
-              const totalGenerateUnits = isAssigned
-                ? sec.seats.length > 0
-                  ? sec.seats.length
-                  : summarySeatTotal
-                : freeCap;
-              const selectedGenerateCount = needsSeatDetail
-                ? 0
-                : isAssigned
-                  ? sec.seats.filter(
-                      (s) =>
-                        !!s.printTicket?.ticket_image_url ||
-                        selectedItems.has(`seat-${s.id}`)
-                    ).length
-                  : sec.seats.length > 0
-                    ? sec.seats.filter(
-                        (s) =>
-                          !!s.printTicket?.ticket_image_url ||
-                          selectedItems.has(`seat-${s.id}`)
-                      ).length
-                    : selectedItems.has(`section-${sec.id}`)
-                      ? freeCap
-                      : 0;
+              const sectionReadyCount =
+                sec.summaryCounts?.generatedCount ??
+                sec.seats.filter((s) => !!s.printTicket?.ticket_image_url).length;
+              const sectionTotalUnits =
+                sec.summaryCounts?.seatCount ??
+                (isAssigned
+                  ? sec.seats.length > 0
+                    ? sec.seats.length
+                    : summarySeatTotal
+                  : freeCap);
 
               return (
                 <div
@@ -1797,34 +1316,6 @@ export function PrintTicketsTab({ eventId }: PrintTicketsTabProps) {
                           disabled={sendingId !== null || (needsSeatDetail && sec.seats.length === 0)}
                         />
                       )}
-                      <Checkbox
-                        checked={
-                          isAssigned
-                            ? sec.seats.length > 0 &&
-                              (sec.seats.every((s) => s.printTicket?.ticket_image_url) ||
-                                sec.seats
-                                  .filter((s) => !s.printTicket?.ticket_image_url)
-                                  .every((s) => selectedItems.has(`seat-${s.id}`)))
-                            : sec.seats.length > 0
-                              ? sec.seats.every((s) => s.printTicket?.ticket_image_url) ||
-                                sec.seats
-                                  .filter((s) => !s.printTicket?.ticket_image_url)
-                                  .every((s) => selectedItems.has(`seat-${s.id}`))
-                              : selectedItems.has(`section-${sec.id}`)
-                        }
-                        disabled={
-                          needsSeatDetail ||
-                          (isAssigned
-                            ? sec.seats.length > 0 && sec.seats.every((s) => s.printTicket?.ticket_image_url)
-                            : sec.seats.length > 0
-                              ? sec.seats.every((s) => s.printTicket?.ticket_image_url)
-                              : freeCap === 0)
-                        }
-                        className="data-[state=checked]:bg-[var(--wish-orange)] data-[state=checked]:border-[var(--wish-orange)] data-[state=indeterminate]:bg-[var(--wish-orange)] data-[state=indeterminate]:border-[var(--wish-orange)]"
-                        onCheckedChange={() =>
-                          toggleSectionSelection(sec.id, isAssigned, sec.seats)
-                        }
-                      />
                     </span>
                     <div className="min-w-0 flex-1 flex flex-wrap items-center gap-x-2 gap-y-1">
                       <span
@@ -1848,7 +1339,7 @@ export function PrintTicketsTab({ eventId }: PrintTicketsTabProps) {
                         )}
                       </span>
                       <span className="text-foreground-muted text-sm font-normal tabular-nums whitespace-nowrap shrink-0">
-                        {selectedGenerateCount} / {totalGenerateUnits} selected
+                        {sectionReadyCount} / {sectionTotalUnits} ready
                       </span>
                       <span
                         className={cn(
@@ -1949,23 +1440,16 @@ export function PrintTicketsTab({ eventId }: PrintTicketsTabProps) {
                             )}
                           >
                             <div className="flex items-center gap-2">
-                              {seat.printTicket?.ticket_image_url && (
+                              {seat.printTicket?.ticket_image_url ? (
                                 <Checkbox
                                   checked={emailSelectedItems.has(`seat-${seat.id}`)}
                                   className="data-[state=checked]:bg-emerald-500 data-[state=checked]:border-emerald-500 data-[state=indeterminate]:bg-emerald-500 data-[state=indeterminate]:border-emerald-500"
                                   onCheckedChange={() => toggleSeatEmailSelection(seat.id)}
                                   disabled={sendingId !== null}
                                 />
+                              ) : (
+                                <span className="inline-block h-4 w-4 shrink-0" aria-hidden />
                               )}
-                              <Checkbox
-                                checked={
-                                  !!seat.printTicket?.ticket_image_url ||
-                                  selectedItems.has(`seat-${seat.id}`)
-                                }
-                                disabled={!!seat.printTicket?.ticket_image_url}
-                                className="data-[state=checked]:bg-[var(--wish-orange)] data-[state=checked]:border-[var(--wish-orange)] data-[state=indeterminate]:bg-[var(--wish-orange)] data-[state=indeterminate]:border-[var(--wish-orange)]"
-                                onCheckedChange={() => toggleSeatSelection(seat.id)}
-                              />
                             </div>
                             <span
                               className={cn(
@@ -2000,7 +1484,7 @@ export function PrintTicketsTab({ eventId }: PrintTicketsTabProps) {
                                         : `${sec.name} · Ticket ${seat.seat_number}`
                                     );
                                   } else {
-                                    toast.error("Generate ticket first");
+                                    toast.error("Generate ticket inventory in Seat Configurator first");
                                   }
                                 }}
                                 disabled={!seat.printTicket || sendingId !== null}
@@ -2130,16 +1614,6 @@ export function PrintTicketsTab({ eventId }: PrintTicketsTabProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      <ConfirmDialog
-        open={deleteDialogOpen}
-        onOpenChange={setDeleteDialogOpen}
-        title="Delete all generated tickets"
-        description="This will remove all generated tickets for this event. Continue?"
-        confirmLabel="Delete all"
-        variant="destructive"
-        onConfirm={handleDeleteAll}
-      />
 
       <ConfirmDialog
         open={!!overwriteZipPrompt}

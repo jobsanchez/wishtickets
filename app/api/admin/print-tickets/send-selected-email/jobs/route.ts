@@ -60,7 +60,7 @@ export async function POST(request: NextRequest) {
   }
   if (uniqueIds.length === 0) {
     return NextResponse.json(
-      { error: "No generated tickets found for selected items. Generate tickets first." },
+      { error: "No generated tickets found for selected items. Generate ticket inventory in Seat Configurator first." },
       { status: 400 }
     );
   }

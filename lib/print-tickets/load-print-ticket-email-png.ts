@@ -1,37 +1,25 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { generateTicketImageForPrint } from "@/lib/ticket-image";
 import { loadPngBufferFromUrl } from "@/lib/print-tickets/load-png-from-url";
 import type { PrintTicketEmailRow } from "@/lib/print-tickets/run-print-tickets-email-from-rows";
 
 /**
- * Ensure a print ticket has an image URL, then load the PNG bytes (same path as bulk email send).
+ * Load PNG bytes for a print ticket that already has an image from Seat Configurator inventory.
  */
 export async function loadPrintTicketEmailPngBuffer(
-  supabase: SupabaseClient,
+  _supabase: SupabaseClient,
   row: PrintTicketEmailRow
 ): Promise<Buffer> {
-  let ticketImageUrl = row.ticket_image_url;
+  const ticketImageUrl = row.ticket_image_url?.trim();
   if (!ticketImageUrl) {
-    const slot =
-      row.event_seat_id == null ? Math.max(1, Math.floor(row.section_slot_index ?? 1)) : undefined;
-    const url = await generateTicketImageForPrint({
-      eventId: row.event_id,
-      eventSectionId: row.event_section_id,
-      eventSeatId: row.event_seat_id,
-      printTicketId: row.id,
-      qrData: row.encrypted_qr ?? undefined,
-      ticketNumberData: row.qr_data ?? undefined,
-      sectionSlotIndex: slot,
-    });
-    if (url) {
-      await supabase.from("print_tickets").update({ ticket_image_url: url }).eq("id", row.id);
-      ticketImageUrl = url;
-      row.ticket_image_url = url;
-    }
+    throw new Error(
+      `Print ticket ${row.id} has no image — generate ticket inventory in Seat Configurator first.`
+    );
   }
-  if (ticketImageUrl) {
-    const fromStorage = await loadPngBufferFromUrl(ticketImageUrl);
-    if (fromStorage) return fromStorage;
-  }
-  throw new Error(`Could not load PNG for print ticket ${row.id}`);
+
+  const fromStorage = await loadPngBufferFromUrl(ticketImageUrl);
+  if (fromStorage) return fromStorage;
+
+  throw new Error(
+    `Could not load PNG for print ticket ${row.id} from Seat Configurator inventory.`
+  );
 }

@@ -1,8 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import {
-  generateTicketImageForPrint,
-  ticketAttachmentExtFromImageUrl,
-} from "@/lib/ticket-image";
+import { ticketAttachmentExtFromImageUrl } from "@/lib/ticket-image";
 import { sendPrintTicketEmail } from "@/lib/send-print-ticket-email";
 import { getPrintTicketGenConcurrency, runPool } from "@/lib/print-tickets/run-pool";
 import { loadPngBufferFromUrl } from "@/lib/print-tickets/load-png-from-url";
@@ -30,7 +27,7 @@ type SectionRowForZip = {
 };
 
 /**
- * Generate missing images, fetch PNGs, optional ZIP for large batches, SMTP send, and log `print_ticket_emails`.
+ * Fetch PNGs from Seat Configurator inventory, optional ZIP for large batches, SMTP send, and log `print_ticket_emails`.
  * Used by HTTP routes (user Supabase client).
  */
 export async function runPrintTicketsEmailFromRows(
@@ -82,37 +79,14 @@ export async function runPrintTicketsEmailFromRows(
       };
     });
   } else {
-    const byId = new Map(ticketsInOrder.map((p) => [p.id, { ...p }]));
-    const needGenerate = ticketsInOrder.filter((pt) => !pt.ticket_image_url);
-
-    await runPool(needGenerate, conc, async (pt) => {
-      const slot =
-        pt.event_seat_id == null ? Math.max(1, Math.floor(pt.section_slot_index ?? 1)) : undefined;
-      const url = await generateTicketImageForPrint({
-        eventId: pt.event_id,
-        eventSectionId: pt.event_section_id,
-        eventSeatId: pt.event_seat_id,
-        printTicketId: pt.id,
-        qrData: pt.encrypted_qr ?? undefined,
-        ticketNumberData: pt.qr_data ?? undefined,
-        sectionSlotIndex: slot,
-      });
-      if (url) {
-        await supabase.from("print_tickets").update({ ticket_image_url: url }).eq("id", pt.id);
-        const row = byId.get(pt.id);
-        if (row) row.ticket_image_url = url;
-      }
-    });
-
-    ticketsWithImages = [];
-    for (const pt of ticketsInOrder) {
-      const row = byId.get(pt.id);
-      if (row?.ticket_image_url) ticketsWithImages.push(row);
+    const missingImages = ticketsInOrder.filter((pt) => !pt.ticket_image_url?.trim());
+    if (missingImages.length > 0) {
+      throw new Error(
+        `${missingImages.length} ticket${missingImages.length === 1 ? "" : "s"} missing images — generate ticket inventory in Seat Configurator first.`
+      );
     }
 
-    if (ticketsWithImages.length === 0) {
-      throw new Error("Could not generate or fetch ticket images");
-    }
+    ticketsWithImages = ticketsInOrder.map((p) => ({ ...p }));
 
     const attachmentSlots: Array<{
       filename: string;

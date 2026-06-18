@@ -9,6 +9,14 @@ export const PAYMONGO_METHOD_OPTIONS = [
   { id: "dob_ubp", label: "UBP Direct Debit" },
 ] as const;
 
+/** PayMongo list processing rates (decimal percent of net) for admin tuning reference. */
+export const PAYMONGO_METHOD_LIST_FEES: Partial<Record<PaymongoMethodId, number>> = {
+  gcash: 0.025,
+  grab_pay: 0.02,
+  paymaya: 0.02,
+  shopee_pay: 0.017,
+};
+
 export type PaymongoMethodId = (typeof PAYMONGO_METHOD_OPTIONS)[number]["id"];
 
 export const DEFAULT_PAYMONGO_METHODS: PaymongoMethodId[] = [

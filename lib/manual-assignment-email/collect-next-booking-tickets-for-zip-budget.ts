@@ -11,6 +11,7 @@ export type ManualDistTicketRow = {
   qr_data: string | null;
   encrypted_qr?: string | null;
   ticket_image_url: string | null;
+  print_ticket_id?: string | null;
   seat_id: string | null;
   section_id: string | null;
   quantity: number | null;
@@ -45,7 +46,7 @@ export async function collectNextBookingTicketsForZipBudget(
 
   const { data: ticketsRaw, error } = await supabase
     .from("tickets")
-    .select("id, qr_data, encrypted_qr, ticket_image_url, seat_id, section_id, quantity")
+    .select("id, qr_data, encrypted_qr, ticket_image_url, print_ticket_id, seat_id, section_id, quantity")
     .in("id", remainingIds)
     .eq("booking_id", bookingId);
 

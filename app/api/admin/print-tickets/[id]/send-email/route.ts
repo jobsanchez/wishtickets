@@ -1,10 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 import { getProfileRole, getCurrentUserId, hasCapability } from "@/lib/auth";
-import {
-  generateTicketImageForPrint,
-  ticketAttachmentExtFromImageUrl,
-} from "@/lib/ticket-image";
+import { ticketAttachmentExtFromImageUrl } from "@/lib/ticket-image";
 import { buildPrintTicketsEmailSubject } from "@/lib/email/scoped-email-subject";
 import { sendPrintTicketEmail } from "@/lib/send-print-ticket-email";
 import { formatEventDateTimeLong } from "@/lib/event-datetime";
@@ -72,39 +69,14 @@ export async function POST(
     );
   }
 
-  let ticketImageUrl = printTicket.ticket_image_url;
-  if (!ticketImageUrl) {
-    const slot =
-      printTicket.event_seat_id == null
-        ? Math.max(
-            1,
-            Math.floor(
-              (printTicket as { section_slot_index?: number }).section_slot_index ?? 1
-            )
-          )
-        : undefined;
-    const url = await generateTicketImageForPrint({
-      eventId: printTicket.event_id,
-      eventSectionId: printTicket.event_section_id,
-      eventSeatId: printTicket.event_seat_id,
-      printTicketId: printTicket.id,
-      qrData: printTicket.encrypted_qr ?? undefined,
-      ticketNumberData: printTicket.qr_data ?? undefined,
-      sectionSlotIndex: slot,
-    });
-    if (url) {
-      await supabase
-        .from("print_tickets")
-        .update({ ticket_image_url: url })
-        .eq("id", printTicketId);
-      ticketImageUrl = url;
-    }
-  }
-
+  const ticketImageUrl = printTicket.ticket_image_url?.trim();
   if (!ticketImageUrl) {
     return NextResponse.json(
-      { error: "Could not generate or retrieve ticket image" },
-      { status: 500 }
+      {
+        error:
+          "This ticket has no image. Generate ticket inventory in Seat Configurator first.",
+      },
+      { status: 400 }
     );
   }
 

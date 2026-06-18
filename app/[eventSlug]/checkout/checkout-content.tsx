@@ -113,7 +113,7 @@ function paymentBucketMeta(bucket: PaymongoPaymentBucket): {
       return {
         label: "E-Wallet",
         Icon: WalletCards,
-        selectedSummary: "GCash/Maya",
+        selectedSummary: "GCash/Maya/ShopeePay",
         logos: [
           { key: "gcash", label: "G", className: "bg-[#2563eb] text-white" },
           { key: "grabpay", label: "Grab", className: "bg-[#16a34a] text-white" },
@@ -122,6 +122,12 @@ function paymentBucketMeta(bucket: PaymongoPaymentBucket): {
             label: "Maya",
             imageSrc: "/brands/maya-logo.png",
             imageAlt: "Maya",
+          },
+          {
+            key: "shopeepay",
+            label: "ShopeePay",
+            imageSrc: "/brands/shopeepay-logo.png",
+            imageAlt: "ShopeePay",
           },
         ],
       };

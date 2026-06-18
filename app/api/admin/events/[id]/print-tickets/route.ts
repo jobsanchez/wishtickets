@@ -202,6 +202,18 @@ async function fetchAssignedSeatsFullForSections(
   return { bySection: seatsBySectionId, error: null };
 }
 
+function sectionSeatCountForSummary(
+  sec: EventSectionRow,
+  physicalSeatCount: number
+): number {
+  const isAssigned = !isFreeStandingSeatingType(sec.seating_type);
+  if (isAssigned) return physicalSeatCount;
+  if (physicalSeatCount > 0) return physicalSeatCount;
+  const cap = sec.capacity;
+  const capNum = typeof cap === "number" && Number.isFinite(cap) ? Math.floor(cap) : 0;
+  return cappedFreeStandingSlotCount(capNum);
+}
+
 function buildSectionItem(
   sec: EventSectionRow,
   ptBySeat: Map<string, { id: string; ticket_image_url: string | null }>,
@@ -226,34 +238,48 @@ function buildSectionItem(
       };
     });
   } else {
-    const slotRows = ptsBySectionNoSeat.get(sec.id) ?? [];
-    const ptBySlot = new Map<
-      number,
-      { id: string; ticket_image_url: string | null; section_slot_index: number }
-    >();
-    for (const pt of slotRows) {
-      const slotIdx = Math.max(1, Math.floor(pt.section_slot_index));
-      if (!ptBySlot.has(slotIdx)) ptBySlot.set(slotIdx, pt);
-    }
-    const cap = sec.capacity;
-    const capNum = typeof cap === "number" && Number.isFinite(cap) ? Math.floor(cap) : 0;
-    const n = cappedFreeStandingSlotCount(capNum);
-    seats = [];
-    for (let slot = 1; slot <= n; slot++) {
-      const pt = ptBySlot.get(slot);
-      if (pt) {
-        seats.push({
-          id: pt.id,
-          row_label: "Ticket",
-          seat_number: String(slot),
-          printTicket: { id: pt.id, ticket_image_url: pt.ticket_image_url },
-        });
-      } else {
-        seats.push({
-          id: buildVirtualPrintSlotSeatId(sec.id, slot),
-          row_label: "Ticket",
-          seat_number: String(slot),
-        });
+    const eventSeats = seatsBySectionId.get(sec.id) ?? [];
+    if (eventSeats.length > 0) {
+      // FCFS / standing with physical `event_seats` — inventory is seat-linked (Seat Configurator).
+      seats = eventSeats.map((es) => {
+        const pt = ptBySeat.get(es.id);
+        return {
+          id: es.id,
+          row_label: es.row_label ?? "Ticket",
+          seat_number: es.seat_number ?? "",
+          ...(pt && { printTicket: pt }),
+        };
+      });
+    } else {
+      const slotRows = ptsBySectionNoSeat.get(sec.id) ?? [];
+      const ptBySlot = new Map<
+        number,
+        { id: string; ticket_image_url: string | null; section_slot_index: number }
+      >();
+      for (const pt of slotRows) {
+        const slotIdx = Math.max(1, Math.floor(pt.section_slot_index));
+        if (!ptBySlot.has(slotIdx)) ptBySlot.set(slotIdx, pt);
+      }
+      const cap = sec.capacity;
+      const capNum = typeof cap === "number" && Number.isFinite(cap) ? Math.floor(cap) : 0;
+      const n = cappedFreeStandingSlotCount(capNum);
+      seats = [];
+      for (let slot = 1; slot <= n; slot++) {
+        const pt = ptBySlot.get(slot);
+        if (pt) {
+          seats.push({
+            id: pt.id,
+            row_label: "Ticket",
+            seat_number: String(slot),
+            printTicket: { id: pt.id, ticket_image_url: pt.ticket_image_url },
+          });
+        } else {
+          seats.push({
+            id: buildVirtualPrintSlotSeatId(sec.id, slot),
+            row_label: "Ticket",
+            seat_number: String(slot),
+          });
+        }
       }
     }
   }
@@ -326,27 +352,24 @@ export async function GET(
   const { ptBySeat, ptsBySectionNoSeat, generatedCountBySection } =
     buildPrintTicketMaps(printTickets);
 
-  const assignedSectionIds = sectionRows
-    .filter((s) => !isFreeStandingSeatingType(s.seating_type))
-    .map((s) => s.id);
+  const allSectionIds = sectionRows.map((s) => s.id);
 
   if (summaryOnly) {
     const { map: seatCounts, error: countErr } = await fetchAssignedSeatCountsBySection(
       supabase,
-      assignedSectionIds
+      allSectionIds
     );
     if (countErr) {
       return NextResponse.json({ error: countErr.message }, { status: 500 });
     }
 
     const result: SectionItem[] = sectionRows.map((sec) => {
+      const physicalSeatCount = seatCounts.get(sec.id) ?? 0;
+      const seatCount = sectionSeatCountForSummary(sec, physicalSeatCount);
+      const generatedCount = generatedCountBySection.get(sec.id) ?? 0;
       const isAssigned = !isFreeStandingSeatingType(sec.seating_type);
       const cap = sec.capacity;
       const capNum = typeof cap === "number" && Number.isFinite(cap) ? Math.floor(cap) : 0;
-      const seatCount = isAssigned
-        ? (seatCounts.get(sec.id) ?? 0)
-        : cappedFreeStandingSlotCount(capNum);
-      const generatedCount = generatedCountBySection.get(sec.id) ?? 0;
       return {
         id: sec.id,
         name: sec.name,
@@ -368,7 +391,7 @@ export async function GET(
   }
 
   const { bySection: seatsBySectionId, error: seatsErr } =
-    await fetchAssignedSeatsFullForSections(supabase, assignedSectionIds);
+    await fetchAssignedSeatsFullForSections(supabase, allSectionIds);
   if (seatsErr) {
     return NextResponse.json({ error: seatsErr.message }, { status: 500 });
   }

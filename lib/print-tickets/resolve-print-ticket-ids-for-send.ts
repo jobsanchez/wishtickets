@@ -113,6 +113,36 @@ export async function resolvePrintTicketIdsForSend(
     await Promise.all(
       wholeSectionIds.map(async (sectionId) => {
         if (freeSet.has(sectionId)) {
+          const { data: seats } = await supabase
+            .from("event_seats")
+            .select("id")
+            .eq("event_section_id", sectionId)
+            .order("row_label")
+            .order("seat_number");
+          const seatIds = (seats ?? []).map((s) => s.id as string);
+          if (seatIds.length > 0) {
+            const printBySeat = new Map<string, string>();
+            for (const batch of chunkArray(seatIds, IN_QUERY_CHUNK)) {
+              const { data, error } = await supabase
+                .from("print_tickets")
+                .select("id, event_seat_id")
+                .eq("event_id", eventId)
+                .eq("event_section_id", sectionId)
+                .in("event_seat_id", batch);
+              if (error) throw new Error(error.message);
+              for (const r of data ?? []) {
+                const esid = (r as { event_seat_id?: string | null }).event_seat_id;
+                if (esid) printBySeat.set(esid, (r as { id: string }).id);
+              }
+            }
+            wholeIdsBySection.set(
+              sectionId,
+              seatIds
+                .map((sid) => printBySeat.get(sid))
+                .filter((id): id is string => typeof id === "string")
+            );
+            return;
+          }
           const { data } = await supabase
             .from("print_tickets")
             .select("id")

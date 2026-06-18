@@ -5,11 +5,16 @@ import { forbiddenUnlessAnyEventSection } from "@/lib/require-event-section";
 import {
   ensureInventoryForSections,
   generateInventoryImages,
+  generateNextTicketInventoryBatch,
 } from "@/lib/ticket-inventory";
+
+export const maxDuration = 120;
 
 const bodySchema = z.object({
   section_ids: z.array(z.string().uuid()).optional(),
   generate_images: z.boolean().optional().default(true),
+  /** When true, process one bounded batch per request (avoids gateway timeouts). */
+  batch: z.boolean().optional().default(false),
 });
 
 export async function POST(
@@ -49,6 +54,17 @@ export async function POST(
   }
 
   try {
+    if (parsed.data.batch) {
+      const batch = await generateNextTicketInventoryBatch(admin, eventId, sectionIds, {
+        generate_images: parsed.data.generate_images,
+      });
+      return NextResponse.json({
+        success: true,
+        ...batch,
+        section_ids: sectionIds,
+      });
+    }
+
     const ensured = await ensureInventoryForSections(admin, eventId, sectionIds);
     let images_generated = 0;
     let images_failed = 0;
@@ -60,12 +76,17 @@ export async function POST(
     }
 
     return NextResponse.json({
+      success: true,
+      complete: true,
       created: ensured.created,
       existing: ensured.existing,
       skipped_allocated: ensured.skipped_allocated,
       inventory_total: ensured.print_ticket_ids.length,
       images_generated,
       images_failed,
+      seats_pending: 0,
+      images_pending: 0,
+      ensure_seats_processed: 0,
       section_ids: sectionIds,
     });
   } catch (e) {

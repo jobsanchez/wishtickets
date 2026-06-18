@@ -79,7 +79,6 @@ function normalizeComparableSlug(input: string): string {
 }
 
 /**
- * Must match `generate-manual-assignment-ticket-images-batch.ts`:
  * `sectionCode = section_code ?? "SEC"`, `sectionName = name ?? section_code ?? "section"`,
  * then slugify `sectionCode || sectionName`.
  */
@@ -460,10 +459,10 @@ function normalizeFolderPrefixForCompare(p: string | null | undefined): string {
 }
 
 /**
- * Manual Distribution ticket images are stored under
- * `print-by-section/{slugify(base + "-manual-" + assignmentId.slice(0,8))}/{sectionSlug}/...`
- * (see `generate-manual-assignment-ticket-images-batch.ts`), not under the bare event slug.
- * Resolves that middle path segment for ZIP listing when bookingId refers to a manual assignment.
+ * Legacy Manual Distribution images may live under
+ * `print-by-section/{slugify(base + "-manual-" + assignmentId.slice(0,8))}/{sectionSlug}/...`.
+ * New confirmations use Seat Configurator inventory URLs under the bare event slug.
+ * Resolves the legacy middle path segment when booking ticket URLs still point at `-manual-` folders.
  */
 /** `_eventId` is kept for callers; slug resolution uses the assignment/booking row (job `event_id` may be stale). */
 export async function getManualDistributionEventStorageSlug(
