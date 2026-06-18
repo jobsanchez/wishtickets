@@ -8,7 +8,6 @@ import {
   Loader2,
   Mail,
   Package,
-  RotateCcw,
   Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -35,7 +34,6 @@ const STATUS_AMBER_MUTED =
 const STATUS_RED_ERR = "text-red-400 [html[data-theme=light]_&]:text-red-700";
 
 export type AssignSeatsDistributionColumnProps = {
-  hasIncompleteConfirmedAssignments: boolean;
   assignmentsEmpty: boolean;
   groupedByRecipient: Array<[string, Assignment[]]>;
   seatsById: Map<string, SeatInfo>;
@@ -54,7 +52,6 @@ export type AssignSeatsDistributionColumnProps = {
   onManageSeatsClick: (a: Assignment) => void;
   onConfirm: (assignmentId: string) => void;
   onReleaseClick: (assignmentId: string) => void;
-  onGenerateMissing: (a: Assignment) => void;
   onOpenAdjustAllocation: (a: Assignment) => void;
   onReverseClick: (assignmentId: string) => void;
   onSendEmail: (assignmentId: string) => void;
@@ -64,7 +61,6 @@ export type AssignSeatsDistributionColumnProps = {
 };
 
 export function AssignSeatsDistributionColumn({
-  hasIncompleteConfirmedAssignments,
   assignmentsEmpty,
   groupedByRecipient,
   seatsById,
@@ -83,7 +79,6 @@ export function AssignSeatsDistributionColumn({
   onManageSeatsClick,
   onConfirm,
   onReleaseClick,
-  onGenerateMissing,
   onOpenAdjustAllocation,
   onReverseClick,
   onSendEmail,
@@ -94,11 +89,6 @@ export function AssignSeatsDistributionColumn({
   return (
     <div className="glass rounded-xl border border-[var(--glass-border)] p-6">
       <h2 className="text-lg font-semibold text-foreground mb-1">Manual Distribution</h2>
-      {hasIncompleteConfirmedAssignments && (
-        <p className="mb-4 text-xs text-amber-300">
-          Confirm is disabled until all confirmed distributions complete ticket image generation.
-        </p>
-      )}
       {assignmentsEmpty ? (
         <p className="text-foreground-muted">No manual distribution yet.</p>
       ) : (
@@ -292,7 +282,7 @@ export function AssignSeatsDistributionColumn({
                                   Ticket images: {assignmentGeneratedTicketImages(a)} /{" "}
                                   {assignmentExpectedTickets(a)}
                                   {assignmentGeneratedTicketImages(a) === 0 &&
-                                    " (no tickets generated yet)"}
+                                    " (generate tickets in Seat Configurator)"}
                                 </p>
                               )}
                               {a.status === "confirmed" && a.booking_id && (
@@ -330,7 +320,7 @@ export function AssignSeatsDistributionColumn({
                                   size="sm"
                                   variant="success"
                                   onClick={() => onConfirm(a.id)}
-                                  disabled={submitting || hasIncompleteConfirmedAssignments}
+                                  disabled={submitting}
                                 >
                                   Confirm
                                 </Button>
@@ -347,24 +337,6 @@ export function AssignSeatsDistributionColumn({
                             {isConfirmedWithBooking && (
                               <div className="flex w-full flex-col gap-2 items-center">
                                 <div className="flex w-full flex-wrap items-center justify-center gap-2">
-                                  {assignmentGeneratedTicketImages(a) <
-                                    assignmentExpectedTickets(a) && (
-                                    <Button
-                                      size="sm"
-                                      variant="secondary"
-                                      onClick={() => onGenerateMissing(a)}
-                                      disabled={submitting}
-                                    >
-                                      <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
-                                      Generate missing (
-                                      {Math.max(
-                                        0,
-                                        assignmentExpectedTickets(a) -
-                                          assignmentGeneratedTicketImages(a)
-                                      )}
-                                      )
-                                    </Button>
-                                  )}
                                   <Button
                                     size="sm"
                                     onClick={() => onOpenAdjustAllocation(a)}

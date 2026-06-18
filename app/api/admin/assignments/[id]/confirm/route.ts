@@ -64,8 +64,8 @@ async function fetchSeatDataByIdsChunked(
 }
 
 /**
- * Confirms manual distribution: booking + ticket rows (`ticket_image_url` null) + seat updates.
- * Client must call `POST .../confirm/generate-images` in a loop until all images exist (avoids gateway timeout).
+ * Confirms manual distribution: booking + ticket rows from Seat Configurator inventory only.
+ * Pre-generated inventory must include rendered ticket images; no on-demand image generation.
  */
 export async function POST(
   _request: NextRequest,
@@ -265,6 +265,8 @@ export async function POST(
         seatId: seat.id,
         eventId: assignment.event_id,
         recipientName: assignment.recipient_name,
+        requireInventory: true,
+        requireInventoryImage: true,
         mintContext:
           eventCode && data
             ? {
@@ -298,6 +300,8 @@ export async function POST(
           sectionCode,
           eventCode,
           recipientName: assignment.recipient_name,
+          requireInventory: true,
+          requireInventoryImage: true,
         });
         ticketRows.push({
           ...row,

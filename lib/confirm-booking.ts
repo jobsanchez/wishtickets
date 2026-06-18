@@ -567,14 +567,11 @@ export async function confirmBooking(
       bookingId,
       error: err instanceof Error ? err.message : String(err),
       duration_ms: Date.now() - t0,
-      result: "rollback_claim",
+      result: "claim_kept",
       error_code: smtpAuthFailed ? "smtp_auth_failed" : "email_send_failed",
     });
-    // Rollback claim so a retry could send
-    await supabase
-      .from("bookings")
-      .update({ ticket_email_sent_at: null })
-      .eq("id", booking.id);
+    // Keep the claim after a send attempt — SMTP may accept the message then error on
+    // response, and rolling back would let a concurrent retry send a duplicate email.
     return {
       ok: false,
       alreadyConfirmed,

@@ -17,6 +17,17 @@ export {
 } from "@/lib/ticket-inventory/generate-images";
 
 export {
+  generateNextTicketInventoryBatch,
+  type GenerateInventoryBatchResult,
+} from "@/lib/ticket-inventory/generate-batch";
+
+export {
+  TICKET_INVENTORY_ENSURE_SEAT_BATCH,
+  TICKET_INVENTORY_IMAGE_BATCH_SIZE,
+  TICKET_INVENTORY_SECTION_WORKERS,
+} from "@/lib/ticket-inventory/constants";
+
+export {
   deleteInventoryForSections,
   type DeleteInventoryResult,
 } from "@/lib/ticket-inventory/delete-inventory";

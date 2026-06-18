@@ -88,7 +88,10 @@ export interface TicketLayoutConfig {
   qr: RegionPos;
   ticketNumber: RegionPos;
   encryptedQr: RegionPos;
-  website: RegionPos;
+  /** Second ticket number overlay (replaces legacy website slot). */
+  ticketNumber2: RegionPos;
+  /** Static "ADMIT ONE" label. */
+  admitOne: RegionPos;
   qrSize?: number;
 }
 
@@ -124,7 +127,8 @@ export const LEGACY_TICKET_LAYOUT_DEFAULT: TicketLayoutConfig = {
   qr: { top: 1093, left: 531, size: 120 },
   ticketNumber: { top: 1232, left: 531, width: 160, height: 43 },
   encryptedQr: { top: 1288, left: 531, width: 160, height: 43 },
-  website: { top: 1420, left: 174, width: 450, height: 28 },
+  ticketNumber2: { top: 1420, left: 174, width: 450, height: 43 },
+  admitOne: { top: 1360, left: 43, width: 300, height: 44 },
 };
 
 export function migrateTicketLayoutFromLegacy797x1500(layout: TicketLayoutConfig): TicketLayoutConfig {
@@ -141,7 +145,8 @@ export function migrateTicketLayoutFromLegacy797x1500(layout: TicketLayoutConfig
     ),
     ticketNumber: scaleRegionForMigration(layout.ticketNumber, false),
     encryptedQr: scaleRegionForMigration(layout.encryptedQr, false),
-    website: scaleRegionForMigration(layout.website, false),
+    ticketNumber2: scaleRegionForMigration(layout.ticketNumber2, false),
+    admitOne: scaleRegionForMigration(layout.admitOne, false),
   };
 }
 
@@ -182,6 +187,27 @@ function readRegion(
   return out;
 }
 
+/** Legacy persisted layouts used `website` where `ticketNumber2` now lives. */
+function readTicketNumber2Region(
+  raw: Record<string, unknown>,
+  fillDefaults: TicketLayoutConfig
+): RegionPos {
+  if (hasTopLeft(raw.ticketNumber2)) {
+    return readRegion(raw, "ticketNumber2", fillDefaults);
+  }
+  if (hasTopLeft(raw.website)) {
+    const legacy = raw.website as Record<string, unknown>;
+    const def = fillDefaults.ticketNumber2;
+    const out: RegionPos = { top: legacy.top as number, left: legacy.left as number };
+    if (typeof legacy.width === "number") out.width = legacy.width;
+    else if (def.width != null) out.width = def.width;
+    const legacyH = typeof legacy.height === "number" ? legacy.height : undefined;
+    out.height = legacyH != null ? Math.max(legacyH, def.height ?? 43) : def.height;
+    return out;
+  }
+  return { ...fillDefaults.ticketNumber2 };
+}
+
 function buildLayoutFromUnknown(
   raw: Record<string, unknown>,
   fillDefaults: TicketLayoutConfig
@@ -194,7 +220,8 @@ function buildLayoutFromUnknown(
     qr: readRegion(raw, "qr", fillDefaults),
     ticketNumber: readRegion(raw, "ticketNumber", fillDefaults),
     encryptedQr: readRegion(raw, "encryptedQr", fillDefaults),
-    website: readRegion(raw, "website", fillDefaults),
+    ticketNumber2: readTicketNumber2Region(raw, fillDefaults),
+    admitOne: readRegion(raw, "admitOne", fillDefaults),
   };
 }
 

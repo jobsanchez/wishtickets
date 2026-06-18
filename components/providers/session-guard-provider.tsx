@@ -9,7 +9,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 const NAV_DEBOUNCE_MS = 300;
 /** Keeps `last_heartbeat_at` fresh during long seat selection (server default inactivity is 15 min). */
-const HEARTBEAT_INTERVAL_MS = 90_000;
+const HEARTBEAT_INTERVAL_MS = 300_000;
 
 function isCartActive(cartId: string | null, expiresAt: string | null): boolean {
   if (!cartId || !expiresAt) return false;

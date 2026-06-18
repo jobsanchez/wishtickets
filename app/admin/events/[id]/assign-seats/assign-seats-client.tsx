@@ -24,7 +24,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { usePermissionDialog } from "@/components/providers/permission-dialog-provider";
-import { FloatingProgressBar } from "@/components/ui/floating-progress";
+import {
+  FLOATING_PROGRESS_PRESETS,
+  FloatingProgressBar,
+} from "@/components/ui/floating-progress";
 import { RouteLoading } from "@/components/ui/route-loading";
 import { NavButtonWithProgress } from "@/components/ui/nav-button-with-progress";
 import { toast } from "@/lib/toast";
@@ -32,8 +35,6 @@ import { cn } from "@/lib/utils";
 import { AssignSeatsDistributionColumn } from "./assign-seats-distribution-column";
 import { FreeStandingChipPicker } from "./free-standing-chip-picker";
 import {
-  assignmentExpectedTickets,
-  assignmentGeneratedTicketImages,
   assignmentTicketCount,
   estimateManualDistributionSendSeconds,
   formatMmSs,
@@ -69,7 +70,6 @@ export default function AssignSeatsClient({ eventId }: AssignSeatsClientProps) {
   const [distributionCategory, setDistributionCategory] = useState<"sales" | "complementary">("sales");
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [confirmProgress, setConfirmProgress] = useState<{ generated: number; total: number } | null>(null);
   const [sendingEmailId, setSendingEmailId] = useState<string | null>(null);
   const distributionSendAbortRef = useRef<AbortController | null>(null);
   const distributionSendEstimateTotalSecRef = useRef(0);
@@ -111,11 +111,6 @@ export default function AssignSeatsClient({ eventId }: AssignSeatsClientProps) {
   const [zipStatusBySection, setZipStatusBySection] = useState<Record<string, SectionZipStatus>>({});
   const [zippingAssignmentId, setZippingAssignmentId] = useState<string | null>(null);
   const { showPermissionDialog } = usePermissionDialog() ?? { showPermissionDialog: () => {} };
-  const GENERATE_MAX_ATTEMPTS = 220;
-  const GENERATE_MAX_CONSECUTIVE_IDLE = 45;
-  const GENERATE_MAX_CONSECUTIVE_ERRORS = 25;
-  /** Pause between successful image batches to avoid saturating the API. */
-  const GENERATE_BATCH_SUCCESS_DELAY_MS = 300;
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -320,17 +315,6 @@ export default function AssignSeatsClient({ eventId }: AssignSeatsClientProps) {
     [selectedSeatIds, totalCapacityOnlySectionQty]
   );
 
-  const hasIncompleteConfirmedAssignments = useMemo(
-    () =>
-      assignments.some(
-        (a) =>
-          a.status === "confirmed" &&
-          !!a.booking_id &&
-          assignmentGeneratedTicketImages(a) < assignmentExpectedTickets(a)
-      ),
-    [assignments]
-  );
-
   const sortedFreeStandingSeats = useCallback(
     (sectionId: string) =>
       seats
@@ -527,9 +511,6 @@ export default function AssignSeatsClient({ eventId }: AssignSeatsClientProps) {
   const handleConfirm = useCallback(
     async (assignmentId: string) => {
       setSubmitting(true);
-      const assignment = assignments.find((a) => a.id === assignmentId);
-      const initialTotal = assignment ? assignmentTicketCount(assignment) : 0;
-      setConfirmProgress({ generated: 0, total: initialTotal });
       try {
         const res = await fetch(`/api/admin/assignments/${assignmentId}/confirm`, {
           method: "POST",
@@ -540,101 +521,13 @@ export default function AssignSeatsClient({ eventId }: AssignSeatsClientProps) {
           showPermissionDialog();
           return;
         }
-        const start = (await res.json().catch(() => ({}))) as {
+        const data = (await res.json().catch(() => ({}))) as {
           success?: boolean;
           booking_id?: string;
-          totalTickets?: number;
           error?: string;
         };
-        if (!res.ok || !start?.success || !start.booking_id) {
-          toast.error(start.error ?? "Failed to confirm");
-          return;
-        }
-        const bookingId = start.booking_id;
-        const total =
-          typeof start.totalTickets === "number" ? start.totalTickets : initialTotal;
-        let loop = 0;
-        let consecutiveIdle = 0;
-        let consecutiveErrors = 0;
-        while (loop < GENERATE_MAX_ATTEMPTS) {
-          loop += 1;
-          try {
-            const imgRes = await fetch(
-              `/api/admin/assignments/${assignmentId}/confirm/generate-images`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ booking_id: bookingId }),
-              }
-            );
-            const img = (await imgRes.json().catch(() => ({}))) as {
-              success?: boolean;
-              processed?: number;
-              failed?: number;
-              generatedTotal?: number;
-              total?: number;
-              complete?: boolean;
-              error?: string;
-            };
-            if (imgRes.status === 403) {
-              showPermissionDialog();
-              return;
-            }
-            if (!imgRes.ok || !img?.success) {
-              consecutiveErrors += 1;
-              if (consecutiveErrors >= GENERATE_MAX_CONSECUTIVE_ERRORS) {
-                await fetchData();
-                toast.error(img.error ?? "Failed to generate ticket images");
-                return;
-              }
-              await sleep(Math.min(4000, 400 + consecutiveErrors * 200));
-              continue;
-            }
-            consecutiveErrors = 0;
-            const gen = typeof img.generatedTotal === "number" ? img.generatedTotal : 0;
-            const tot = typeof img.total === "number" ? img.total : total;
-            setConfirmProgress({ generated: gen, total: Math.max(tot, gen) });
-            const failedCount = typeof img.failed === "number" ? img.failed : 0;
-            if (failedCount > 0) {
-              // `failed` is per HTTP batch only; the loop keeps polling until `complete` (all URLs set).
-              if (img.complete) {
-                console.warn(
-                  "[assign-seats] Image job marked complete but this batch reported failures — check server logs",
-                  { assignmentId, bookingId, failedThisBatch: failedCount }
-                );
-              } else {
-                console.info(
-                  "[assign-seats] Some ticket images failed this batch; still polling until all are generated",
-                  { assignmentId, bookingId, failedThisBatch: failedCount }
-                );
-              }
-            }
-            if (img.complete) break;
-            if ((img.processed ?? 0) === 0) {
-              consecutiveIdle += 1;
-              if (consecutiveIdle >= GENERATE_MAX_CONSECUTIVE_IDLE) {
-                await fetchData();
-                toast.error("Ticket image generation stayed idle too long");
-                return;
-              }
-              await sleep(Math.min(5000, 500 + consecutiveIdle * 150));
-              continue;
-            }
-            consecutiveIdle = 0;
-            await sleep(GENERATE_BATCH_SUCCESS_DELAY_MS);
-          } catch {
-            consecutiveErrors += 1;
-            if (consecutiveErrors >= GENERATE_MAX_CONSECUTIVE_ERRORS) {
-              await fetchData();
-              toast.error("Failed to generate ticket images");
-              return;
-            }
-            await sleep(Math.min(4000, 400 + consecutiveErrors * 200));
-          }
-        }
-        if (loop >= GENERATE_MAX_ATTEMPTS) {
-          await fetchData();
-          toast.error("Ticket image generation took too long — refresh and try again if needed.");
+        if (!res.ok || !data?.success || !data.booking_id) {
+          toast.error(data.error ?? "Failed to confirm");
           return;
         }
 
@@ -644,109 +537,6 @@ export default function AssignSeatsClient({ eventId }: AssignSeatsClientProps) {
         await fetchData();
         toast.error("Failed to confirm");
       } finally {
-        setConfirmProgress(null);
-        setSubmitting(false);
-      }
-    },
-    [assignments, fetchData, showPermissionDialog]
-  );
-
-  const handleGenerateMissing = useCallback(
-    async (assignment: Assignment) => {
-      if (!assignment.booking_id) return;
-      setSubmitting(true);
-      const expected = assignmentExpectedTickets(assignment);
-      const initialGenerated = assignmentGeneratedTicketImages(assignment);
-      setConfirmProgress({ generated: initialGenerated, total: expected });
-      try {
-        let loop = 0;
-        let consecutiveIdle = 0;
-        let consecutiveErrors = 0;
-        while (loop < GENERATE_MAX_ATTEMPTS) {
-          loop += 1;
-          try {
-            const imgRes = await fetch(
-              `/api/admin/assignments/${assignment.id}/confirm/generate-images`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ booking_id: assignment.booking_id }),
-              }
-            );
-            const img = (await imgRes.json().catch(() => ({}))) as {
-              success?: boolean;
-              processed?: number;
-              failed?: number;
-              generatedTotal?: number;
-              total?: number;
-              complete?: boolean;
-              error?: string;
-            };
-            if (imgRes.status === 403) {
-              showPermissionDialog();
-              return;
-            }
-            if (!imgRes.ok || !img?.success) {
-              consecutiveErrors += 1;
-              if (consecutiveErrors >= GENERATE_MAX_CONSECUTIVE_ERRORS) {
-                await fetchData();
-                toast.error(img.error ?? "Failed to generate missing ticket images");
-                return;
-              }
-              await sleep(Math.min(4000, 400 + consecutiveErrors * 200));
-              continue;
-            }
-
-            consecutiveErrors = 0;
-            const gen =
-              typeof img.generatedTotal === "number" ? img.generatedTotal : initialGenerated;
-            const tot = typeof img.total === "number" ? img.total : expected;
-            setConfirmProgress({ generated: gen, total: Math.max(tot, gen) });
-            const failedCount = typeof img.failed === "number" ? img.failed : 0;
-            if (failedCount > 0) {
-              console.warn("[assign-seats] some missing ticket images failed this batch", {
-                assignmentId: assignment.id,
-                bookingId: assignment.booking_id,
-                failed: failedCount,
-              });
-            }
-
-            if (img.complete) break;
-            if ((img.processed ?? 0) === 0) {
-              consecutiveIdle += 1;
-              if (consecutiveIdle >= GENERATE_MAX_CONSECUTIVE_IDLE) {
-                await fetchData();
-                toast.error("Ticket image generation stayed idle too long");
-                return;
-              }
-              await sleep(Math.min(5000, 500 + consecutiveIdle * 150));
-              continue;
-            }
-            consecutiveIdle = 0;
-            await sleep(GENERATE_BATCH_SUCCESS_DELAY_MS);
-          } catch {
-            consecutiveErrors += 1;
-            if (consecutiveErrors >= GENERATE_MAX_CONSECUTIVE_ERRORS) {
-              await fetchData();
-              toast.error("Failed to generate missing ticket images");
-              return;
-            }
-            await sleep(Math.min(4000, 400 + consecutiveErrors * 200));
-          }
-        }
-        if (loop >= GENERATE_MAX_ATTEMPTS) {
-          await fetchData();
-          toast.error("Ticket image generation took too long — refresh and try again if needed.");
-          return;
-        }
-
-        toast.success("Missing ticket images generated");
-        fetchData();
-      } catch {
-        await fetchData();
-        toast.error("Failed to generate missing ticket images");
-      } finally {
-        setConfirmProgress(null);
         setSubmitting(false);
       }
     },
@@ -1474,21 +1264,12 @@ export default function AssignSeatsClient({ eventId }: AssignSeatsClientProps) {
           "Updating allocation, then clearing section ZIP files so your next export is fresh.",
       };
     }
-    if (confirmProgress) {
-      const total = Math.max(confirmProgress.total, confirmProgress.generated);
-      return {
-        message: "Generating ticket images",
-        subtitle: `${confirmProgress.generated} / ${total} tickets`,
-        detail:
-          "Rendering and saving images in batches. Leave this tab open until the counter finishes.",
-      };
-    }
     if (submitting) {
       return {
-        message: "Saving…",
+        ...FLOATING_PROGRESS_PRESETS.genericSave,
+        message: "Confirming distribution",
         subtitle: eventTitle || "Manual distribution",
-        detail:
-          "Hang tight — this usually finishes in a few seconds.",
+        detail: "Allocating tickets from Seat Configurator inventory. Keep this tab open.",
       };
     }
     return {
@@ -1503,7 +1284,6 @@ export default function AssignSeatsClient({ eventId }: AssignSeatsClientProps) {
     allocationReleaseOverlay,
     adjustAllocationAssignment?.recipient_name,
     selectedAdjustTicketIds.size,
-    confirmProgress,
     submitting,
     eventTitle,
   ]);
@@ -1795,7 +1575,6 @@ export default function AssignSeatsClient({ eventId }: AssignSeatsClientProps) {
         </div>
 
         <AssignSeatsDistributionColumn
-          hasIncompleteConfirmedAssignments={hasIncompleteConfirmedAssignments}
           assignmentsEmpty={assignments.length === 0}
           groupedByRecipient={groupedByRecipient}
           seatsById={seatsById}
@@ -1814,7 +1593,6 @@ export default function AssignSeatsClient({ eventId }: AssignSeatsClientProps) {
           onManageSeatsClick={handleManageSeatsClick}
           onConfirm={handleConfirm}
           onReleaseClick={handleReleaseClick}
-          onGenerateMissing={handleGenerateMissing}
           onOpenAdjustAllocation={openAdjustAllocation}
           onReverseClick={handleReverseClick}
           onSendEmail={handleSendEmail}

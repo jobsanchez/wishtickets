@@ -71,10 +71,17 @@ const REGIONS = [
     resizable: true,
   },
   {
-    key: "website" as const,
-    label: "Website",
-    defaultW: DEFAULT_LAYOUT.website.width ?? 450,
-    defaultH: DEFAULT_LAYOUT.website.height ?? 28,
+    key: "ticketNumber2" as const,
+    label: "Ticket Number (2)",
+    defaultW: DEFAULT_LAYOUT.ticketNumber2.width ?? 450,
+    defaultH: DEFAULT_LAYOUT.ticketNumber2.height ?? 43,
+    resizable: true,
+  },
+  {
+    key: "admitOne" as const,
+    label: "ADMIT ONE",
+    defaultW: DEFAULT_LAYOUT.admitOne.width ?? 300,
+    defaultH: DEFAULT_LAYOUT.admitOne.height ?? 44,
     resizable: true,
   },
 ] as const;
@@ -145,12 +152,25 @@ function scaleLayoutToCanvas(
           ? Math.max(1, Math.round(layout.encryptedQr.height * sy))
           : undefined,
     },
-    website: {
-      ...layout.website,
-      top: Math.round(layout.website.top * sy),
-      left: Math.round(layout.website.left * sx),
-      width: layout.website.width != null ? Math.max(1, Math.round(layout.website.width * sx)) : undefined,
-      height: layout.website.height != null ? Math.max(1, Math.round(layout.website.height * sy)) : undefined,
+    ticketNumber2: {
+      ...layout.ticketNumber2,
+      top: Math.round(layout.ticketNumber2.top * sy),
+      left: Math.round(layout.ticketNumber2.left * sx),
+      width:
+        layout.ticketNumber2.width != null
+          ? Math.max(1, Math.round(layout.ticketNumber2.width * sx))
+          : undefined,
+      height:
+        layout.ticketNumber2.height != null
+          ? Math.max(1, Math.round(layout.ticketNumber2.height * sy))
+          : undefined,
+    },
+    admitOne: {
+      ...layout.admitOne,
+      top: Math.round(layout.admitOne.top * sy),
+      left: Math.round(layout.admitOne.left * sx),
+      width: layout.admitOne.width != null ? Math.max(1, Math.round(layout.admitOne.width * sx)) : undefined,
+      height: layout.admitOne.height != null ? Math.max(1, Math.round(layout.admitOne.height * sy)) : undefined,
     },
     qrSize:
       layout.qrSize != null

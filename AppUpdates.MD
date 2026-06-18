@@ -4,6 +4,116 @@ Changelog of app updates and edited files. Update this file whenever you edit pr
 
 ---
 
+## 2026-06-18 – ShopeePay checkout logo and list fee reference
+
+- `public/brands/shopeepay-logo.png` – ShopeePay brand asset
+- `app/[eventSlug]/checkout/checkout-content.tsx` – ShopeePay logo on E-Wallet payment bucket (checkout and resume-payment selectors)
+- `lib/paymongo-methods.ts` – `PAYMONGO_METHOD_LIST_FEES` with ShopeePay at 1.70%
+- `app/admin/settings/paymongo-settings.tsx` – Show PayMongo list fee next to each e-wallet method label
+
+**Updates:** Checkout E-Wallet row now shows the ShopeePay logo alongside GCash, GrabPay, and Maya. Admin PayMongo settings label ShopeePay with its 1.70% PayMongo list fee for surcharge tuning.
+
+## 2026-06-15 – Fix duplicate ticket confirmation emails
+
+- `lib/confirm-booking.ts` – Keep `ticket_email_sent_at` claim after a send attempt (no rollback on SMTP failure) so concurrent retries cannot send a second copy
+- `app/[eventSlug]/confirmation/[bookingId]/page.tsx` – Single `confirmBooking` kick per page load; skip when `ticket_email_sent_at` is already set
+- `app/api/checkout/route.ts` – Route immediate (non-PayMongo) confirmations through `confirmBooking` instead of a separate inline `sendTicketEmail` path
+
+**Updates:** Ticket purchase emails were sent twice because checkout and the confirmation page each had their own send path, and multiple confirmation-page triggers could race. All sends now go through the atomic `confirmBooking` claim.
+
+---
+
+## 2026-06-13 – Print Tickets: fix FCFS bulk email send
+
+- `components/admin/print-tickets-tab.tsx` – Send selected passes physical `event_seat_id` for FCFS sections (not legacy slot index)
+- `lib/print-tickets/resolve-print-ticket-ids-for-send.ts` – Whole-section free/standing resolves seat-linked inventory first
+- `app/api/admin/print-tickets/send-selected-email/jobs/route.ts`, `send-selected-email/route.ts` – Clearer error when no tickets resolved
+
+**Updates:** Bulk email send for FCFS sections (e.g. Upper Box) resolves Seat Configurator tickets correctly.
+
+---
+
+## 2026-06-13 – Print Tickets: show FCFS seat-linked inventory
+
+- `app/api/admin/events/[id]/print-tickets/route.ts` – Free/standing sections with physical `event_seats` now map `print_tickets` by `event_seat_id` (matches Seat Configurator); summary counts use physical seat totals
+- `components/admin/print-tickets-tab.tsx` – Inventory summary uses API `seatCount` for all section types
+
+**Updates:** Tickets generated in Seat Configurator for FCFS sections (e.g. Upper Box) now appear as ready in Print Tickets.
+
+---
+
+## 2026-06-13 – Print Tickets: zip and email only
+
+- `components/admin/print-tickets-tab.tsx` – Removed Generate UI; shows Seat Configurator inventory readiness; zip/email actions only
+- `app/api/admin/print-tickets/generate/route.ts`, `lib/print-tickets/generate.ts`, `lib/print-tickets/allocate-print-qr-data.ts` – Removed
+- `lib/print-tickets/load-print-ticket-email-png.ts`, `lib/print-tickets/run-print-tickets-email-from-rows.ts`, `app/api/admin/print-tickets/[id]/send-email/route.ts` – No on-demand image generation; require Seat Configurator inventory
+- `lib/print-tickets/run-pool.ts` – Comment updates
+
+**Updates:** Print Tickets no longer generates ticket files; it packages and emails tickets already generated in Seat Configurator.
+
+---
+
+## 2026-06-13 – Manual Distribution: inventory-only tickets
+
+- `lib/ticket-inventory/build-sale-ticket.ts` – `requireInventory` / `requireInventoryImage` options for manual distribution
+- `app/api/admin/assignments/[id]/confirm/route.ts` – Always requires Seat Configurator inventory with pre-rendered images
+- `app/api/admin/assignments/[id]/confirm/generate-images/route.ts` – Removed (no on-demand image generation)
+- `lib/manual-assignment-confirm/generate-manual-assignment-ticket-images-batch.ts`, `lib/manual-assignment-confirm/constants.ts` – Removed
+- `app/admin/events/[id]/assign-seats/assign-seats-client.tsx`, `assign-seats-distribution-column.tsx` – Single-step confirm; removed image polling and Generate missing
+- `lib/manual-assignment-email/load-booking-ticket-png.ts`, `collect-next-booking-tickets-for-zip-budget.ts` – Resolve inventory URLs only for ZIP/email
+- `lib/print-tickets/section-zip-jobs.ts`, `lib/ticket-inventory/constants.ts` – Comment updates
+
+**Updates:** Manual Distribution no longer renders new ticket files; confirm allocates pre-generated Seat Configurator tickets only.
+
+---
+
+## 2026-06-12 – Batched parallel ticket inventory generation
+
+- `lib/ticket-inventory/constants.ts`, `lib/ticket-inventory/generate-batch.ts` – Bounded batch API: ensure up to 50 seats or render up to 32 images per request
+- `lib/ticket-inventory/run-generate-client.ts` – Client runner with 2 parallel section workers; each section polls batch requests until complete
+- `app/api/admin/events/[id]/seating/ticket-inventory/generate/route.ts` – `batch: true` mode, `maxDuration = 120`
+- `components/admin/seat-configurator.tsx` – Generate tickets uses batched workers with live progress instead of one long POST
+
+**Updates:** Seat Configurator ticket generation no longer times out on large sections; work runs in small server batches with parallel section workers.
+
+---
+
+## 2026-06-12 – Ticket layout: remove website, add ticket number 2 and ADMIT ONE
+
+- `lib/ticket-canvas-spec.ts` – Replaced `website` with `ticketNumber2` and `admitOne` regions; legacy `website` coords migrate to `ticketNumber2` on load
+- `components/admin/ticket-layout-editor.tsx` – Draggable **Ticket Number (2)** and **ADMIT ONE** overlay boxes
+- `lib/ticket-image.ts` – Renders duplicate CTRL ticket number at bottom slot and static **ADMIT ONE** text; removed site URL overlay
+
+**Updates:** Ticket layout no longer shows the website URL; a second ticket number sits in that slot and **ADMIT ONE** is a movable static label.
+
+---
+
+## 2026-06-12 – SVIP section group all caps on book page
+
+- `app/[eventSlug]/book/book-page-client.tsx` – `formatSectionGroupDisplayLabel` uppercases short single-word group codes (e.g. Svip → SVIP)
+
+**Updates:** Reserved Seating category bar shows SVIP in all caps alongside VIP.
+
+---
+
+## 2026-06-12 – Chunk large seat generation
+
+- `lib/event-seats/seat-insert-chunks.ts` – shared 500-row insert chunks and paginated scan_code fetch
+- `app/api/admin/events/[id]/seating/seats/route.ts` – chunked inserts, paginated cross-section scan codes, `maxDuration = 120`
+- `components/admin/seat-configurator.tsx` – "Generating seats" progress overlay with section name and count
+
+**Updates:** Generate seats (e.g. 2836 FCFS) no longer fails with 500 from single bulk insert or incomplete scan_code dedupe on events with 1000+ existing seats.
+
+---
+
+## 2026-06-11 – Session activity heartbeat 300 seconds
+
+- `components/providers/session-guard-provider.tsx` – `HEARTBEAT_INTERVAL_MS` 90s → 300s
+
+**Updates:** Periodic session state/activity checks while a tab is visible now run every 5 minutes instead of every 90 seconds.
+
+---
+
 ## 2026-06-11 – Inactivity PayMongo flow test coverage
 
 - `lib/inactivity-config.test.ts` – asserts idle logout is skipped when `in_paymongo_flow` is true

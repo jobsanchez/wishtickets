@@ -62,6 +62,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { runTicketInventoryGenerateClient } from "@/lib/ticket-inventory/run-generate-client";
 
 type SeatingType = "assigned" | "free" | "standing";
 const UNGROUPED_GROUP_LABEL = "Ungrouped";
@@ -140,6 +141,10 @@ export function SeatConfigurator({ eventId, venueId, venueName = "", initialSeat
   const [deleteSectionId, setDeleteSectionId] = useState<string | null>(null);
   const [deleteSelectedSectionId, setDeleteSelectedSectionId] = useState<string | null>(null);
   const [generateSectionId, setGenerateSectionId] = useState<string | null>(null);
+  const [generatingSeatsMeta, setGeneratingSeatsMeta] = useState<{
+    sectionName: string;
+    count: number;
+  } | null>(null);
   const [expandedSectionIds, setExpandedSectionIds] = useState<Set<string>>(new Set());
   const [collapsedGroupNames, setCollapsedGroupNames] = useState<Set<string>>(new Set());
   const [loadedSeatSectionIds, setLoadedSeatSectionIds] = useState<Set<string>>(new Set());
@@ -1231,6 +1236,12 @@ export function SeatConfigurator({ eventId, venueId, venueName = "", initialSeat
       };
     }
 
+    setGeneratingSeatsMeta({
+      sectionName: sec?.name ?? "Section",
+      count: isFreeStanding
+        ? parseInt(cfg.capacity ?? String(sec?.capacity ?? 50), 10) || 0
+        : (parseInt(cfg.numRows ?? "3", 10) || 0) * (parseInt(cfg.numColumns ?? "5", 10) || 0),
+    });
     setSaving(true);
     try {
       const res = await fetch(`/api/admin/events/${eventId}/seating/seats`, {
@@ -1250,6 +1261,7 @@ export function SeatConfigurator({ eventId, venueId, venueName = "", initialSeat
       toast.error("Failed to generate seats");
     } finally {
       setSaving(false);
+      setGeneratingSeatsMeta(null);
       setGenerateSectionId(null);
     }
   }
@@ -1283,37 +1295,41 @@ export function SeatConfigurator({ eventId, venueId, venueName = "", initialSeat
 
     setGeneratingTickets(true);
     setTicketGenProgress({
-      percent: 10,
+      percent: 5,
       message: "Generating ticket inventory",
       subtitle: "Seat configurator",
-      detail: "Creating print ticket rows and rendering images on the server.",
+      detail: "Starting batched workers. Keep this tab open.",
     });
 
+    const sectionLabelById = new Map(
+      sections.map((s) => [s.id, s.name?.trim() || s.section_code?.trim() || "Section"])
+    );
+
     try {
-      const res = await fetch(
-        `/api/admin/events/${eventId}/seating/ticket-inventory/generate`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            section_ids: targetIds,
-            generate_images: true,
-          }),
-        }
-      );
-      const data = await res.json();
-      if (!res.ok) {
-        toast.error(data.error ?? "Failed to generate tickets");
+      const result = await runTicketInventoryGenerateClient({
+        eventId,
+        sectionIds: targetIds,
+        generateImages: true,
+        sectionLabelById,
+        onProgress: setTicketGenProgress,
+      });
+      if (!result.ok) {
+        toast.error(result.error);
         return;
       }
+      const { totals } = result;
       setTicketGenProgress({
         percent: 100,
         message: "Ticket inventory ready",
         subtitle: "Seat configurator",
-        detail: `${data.created ?? 0} new, ${data.existing ?? 0} existing, ${data.images_generated ?? 0} images rendered.`,
+        detail: `${totals.created} new, ${totals.existing} existing, ${totals.images_generated} images rendered.`,
       });
       toast.success(
-        `Tickets: ${data.inventory_total ?? 0} inventory rows (${data.images_generated ?? 0} images)`
+        `Tickets: ${totals.inventory_total} inventory rows (${totals.images_generated} images)${
+          totals.images_failed > 0
+            ? ` · ${totals.images_failed} image${totals.images_failed === 1 ? "" : "s"} failed`
+            : ""
+        }`
       );
       await fetchSeating({ preserveExpanded: true, silent: true });
     } catch {
@@ -1487,6 +1503,13 @@ export function SeatConfigurator({ eventId, venueId, venueName = "", initialSeat
     if (generatingTickets && ticketGenProgress) {
       return ticketGenProgress;
     }
+    if (generatingSeatsMeta) {
+      return {
+        message: "Generating seats",
+        subtitle: `${generatingSeatsMeta.sectionName} · ${generatingSeatsMeta.count.toLocaleString()} seats`,
+        detail: "Creating seat rows and unique scan codes on the server. Keep this tab open.",
+      };
+    }
     if (saving) {
       return {
         message: "Saving seating layout",
@@ -1497,6 +1520,7 @@ export function SeatConfigurator({ eventId, venueId, venueName = "", initialSeat
     return { message: "Saving…", subtitle: undefined, detail: undefined };
   }, [
     saving,
+    generatingSeatsMeta,
     seatMapUploading,
     seatMapSaving,
     saveTemplateSaving,

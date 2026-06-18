@@ -16,6 +16,7 @@ import {
 import { RouteLoading } from "@/components/ui/route-loading";
 import {
   DEFAULT_PAYMONGO_METHODS,
+  PAYMONGO_METHOD_LIST_FEES,
   PAYMONGO_METHOD_OPTIONS,
   sanitizePaymongoMethods,
   type PaymongoMethodId,
@@ -354,6 +355,12 @@ export function PaymongoSettings() {
                   />
                   <span className="text-sm text-foreground">
                     {method.label}
+                    {PAYMONGO_METHOD_LIST_FEES[method.id] != null ? (
+                      <span className="text-foreground-muted">
+                        {" "}
+                        · PayMongo {(PAYMONGO_METHOD_LIST_FEES[method.id]! * 100).toFixed(2).replace(/\.?0+$/, "")}%
+                      </span>
+                    ) : null}
                   </span>
                 </label>
               ))}

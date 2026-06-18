@@ -33,7 +33,7 @@ const MAX_PRINT_TICKET_GEN_CONCURRENCY = 32;
 const DEFAULT_PRINT_TICKET_GEN_CONCURRENCY = MAX_PRINT_TICKET_GEN_CONCURRENCY;
 
 /**
- * Server-side concurrency for print ticket image generation (`POST /api/admin/print-tickets/generate`).
+ * Server-side concurrency for Seat Configurator ticket image rendering.
  * Set `PRINT_TICKET_GEN_CONCURRENCY` (1–32); invalid values fall back to 10.
  */
 export function getPrintTicketGenConcurrency(): number {
@@ -48,7 +48,7 @@ const MAX_CLIENT_PRINT_GEN_CONCURRENCY = 32;
 const DEFAULT_CLIENT_PRINT_GEN_CONCURRENCY = MAX_CLIENT_PRINT_GEN_CONCURRENCY;
 
 /**
- * Browser-only: parallel `POST /api/admin/print-tickets/generate` calls per tab for bulk admin generation.
+ * Browser-only concurrency constant (legacy name; used by Seat Configurator inventory image batches).
  * Set `NEXT_PUBLIC_PRINT_CLIENT_GEN_CONCURRENCY` (1–32); invalid -> max.
  * Rebuild/restart dev after changing — value is inlined at compile time.
  */

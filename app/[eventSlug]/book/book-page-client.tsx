@@ -104,6 +104,16 @@ function rowSortValue(label: string | null | undefined): string {
   return (label ?? "~").trim().toUpperCase();
 }
 
+function formatSectionGroupDisplayLabel(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return trimmed;
+  if (/^[a-z0-9]+$/i.test(trimmed)) {
+    if (trimmed.length <= 4) return trimmed.toUpperCase();
+    return trimmed.charAt(0).toUpperCase() + trimmed.slice(1).toLowerCase();
+  }
+  return trimmed;
+}
+
 function getSectionGroupTitleParts(
   sections: SectionInfo[]
 ): Array<{ label: string; color: string | null }> {
@@ -121,17 +131,16 @@ function getSectionGroupTitleParts(
       if (!source) return "";
       const firstToken = source.split(/\s+/)[0]?.trim() ?? "";
       if (!firstToken || !/^[a-z0-9]+$/i.test(firstToken)) return "";
-      return firstToken.length <= 3
-        ? firstToken.toUpperCase()
-        : firstToken.charAt(0).toUpperCase() + firstToken.slice(1).toLowerCase();
+      return formatSectionGroupDisplayLabel(firstToken);
     })();
-    const label =
+    const rawLabel =
       (typeof explicit === "string" && explicit.trim().length > 0
         ? explicit.trim()
         : inferredFromName) ||
       section.name ||
       section.section_code ||
       section.id;
+    const label = formatSectionGroupDisplayLabel(rawLabel);
     const key = label.toLowerCase();
     const color = sectionSwatchColor(section).toLowerCase();
     const existing = grouped.get(key);

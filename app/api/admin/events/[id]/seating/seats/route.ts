@@ -5,7 +5,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import crypto from "crypto";
 import { deterministicEncryptedQrForNewSeat } from "@/lib/event-seats/seat-encrypted-qr";
+import {
+  fetchAllEventScanCodesExceptSection,
+  insertEventSeatsInChunks,
+} from "@/lib/event-seats/seat-insert-chunks";
 import { sectionHasAllocatedInventory } from "@/lib/ticket-inventory";
+
+export const maxDuration = 120;
 
 
 /** Excel-style row label: 0->A, 1->B, ..., 25->Z, 26->AA, ... */
@@ -184,13 +190,17 @@ export async function POST(
     });
   }
 
-  const { data: otherSectionSeats } = await supabase
-    .from("event_seats")
-    .select("scan_code")
-    .eq("event_id", id)
-    .neq("event_section_id", parsed.data.event_section_id);
-
-  const usedCodes = new Set((otherSectionSeats ?? []).map((s) => s.scan_code));
+  let usedCodes: Set<string>;
+  try {
+    usedCodes = await fetchAllEventScanCodesExceptSection(
+      supabase,
+      id,
+      parsed.data.event_section_id
+    );
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "Failed to load existing scan codes";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
 
   for (const row of seatRows) {
     while (usedCodes.has(row.scan_code)) {
@@ -227,10 +237,10 @@ export async function POST(
     return NextResponse.json({ error: deleteError.message }, { status: 500 });
   }
 
-  const { error } = await supabase.from("event_seats").insert(seatRows);
+  const { error: insertError } = await insertEventSeatsInChunks(supabase, seatRows);
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  if (insertError) {
+    return NextResponse.json({ error: insertError.message }, { status: 500 });
   }
 
   const batchCount = seatRows.length;

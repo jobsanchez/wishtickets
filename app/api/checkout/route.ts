@@ -15,17 +15,14 @@ import {
   buildSeatSaleTicket,
   buildSectionSaleTicket,
   finalizeInventoryAllocationsForSaleTickets,
-  resolveTicketImageUrl,
   TicketInventoryError,
 } from "@/lib/ticket-inventory";
 import {
   generateAndUploadTicketImage,
   getResolvedTicketTemplate,
-  generateTicketImageForTicketId,
-  ticketAttachmentExtFromImageUrl,
 } from "@/lib/ticket-image";
-import { sendEventSaleNotificationToTeam, sendTicketEmail } from "@/lib/email";
-import { generateQRBuffer } from "@/lib/qr";
+import { sendEventSaleNotificationToTeam } from "@/lib/email";
+import { confirmBooking } from "@/lib/confirm-booking";
 import { getProfileRole } from "@/lib/auth";
 import { getSiteOrigin } from "@/lib/site-url";
 import { formatEventDateTimeLong } from "@/lib/event-datetime";
@@ -43,86 +40,6 @@ import {
 } from "@/lib/promo-apply";
 import { parsePromoRule } from "@/lib/promo-rule-schema";
 import type { PaymongoMethodId } from "@/lib/paymongo-methods";
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-/** Match `lib/confirm-booking` — parallelize ticket attachment prep; cap concurrency for serverless memory. */
-const CHECKOUT_TICKET_ATTACHMENT_CONCURRENCY = 10;
-
-async function buildCheckoutEmailTicketAttachment(
-  admin: ReturnType<typeof createAdminClient>,
-  t: {
-    id: string;
-    qr_data: string;
-    encrypted_qr?: string | null;
-    ticket_image_url: string | null;
-    print_ticket_id?: string | null;
-  },
-  index: number
-): Promise<{ filename: string; content: Buffer }> {
-  let buf: Buffer;
-  const qrPayload = t.encrypted_qr ?? t.qr_data;
-  let imageUrlForExt: string | null = null;
-
-  const ticketImageUrl =
-    (await resolveTicketImageUrl(admin, t, {
-      generateIfMissing: Boolean(t.print_ticket_id),
-    })) ?? t.ticket_image_url;
-
-  if (ticketImageUrl) {
-    const res = await fetch(ticketImageUrl);
-    if (res.ok) {
-      buf = Buffer.from(await res.arrayBuffer());
-      imageUrlForExt = ticketImageUrl;
-    } else {
-      buf = await generateQRBuffer(qrPayload);
-    }
-  } else if (!t.print_ticket_id) {
-    const generated = await generateTicketImageForTicketId(t.id);
-    if (generated) {
-      const res = await fetch(generated);
-      if (res.ok) {
-        buf = Buffer.from(await res.arrayBuffer());
-        imageUrlForExt = generated;
-      } else {
-        buf = await generateQRBuffer(qrPayload);
-      }
-    } else {
-      buf = await generateQRBuffer(qrPayload);
-    }
-  } else {
-    buf = await generateQRBuffer(qrPayload);
-  }
-  const ext = imageUrlForExt ? ticketAttachmentExtFromImageUrl(imageUrlForExt) : "png";
-  return { filename: `ticket-${index + 1}.${ext}`, content: buf };
-}
-
-async function buildCheckoutEmailAttachmentsParallel(
-  adminClient: ReturnType<typeof createAdminClient>,
-  ticketRows: {
-    id: string;
-    qr_data: string;
-    encrypted_qr?: string | null;
-    ticket_image_url: string | null;
-    print_ticket_id?: string | null;
-  }[]
-): Promise<{ filename: string; content: Buffer }[]> {
-  const out: { filename: string; content: Buffer }[] = [];
-  for (let start = 0; start < ticketRows.length; start += CHECKOUT_TICKET_ATTACHMENT_CONCURRENCY) {
-    const slice = ticketRows.slice(start, start + CHECKOUT_TICKET_ATTACHMENT_CONCURRENCY);
-    const batch = await Promise.all(
-      slice.map((t, j) => buildCheckoutEmailTicketAttachment(adminClient, t, start + j))
-    );
-    out.push(...batch);
-  }
-  return out;
-}
 
 async function notifyTeamOnSuccessfulSale(params: {
   admin: ReturnType<typeof createAdminClient>;
@@ -753,7 +670,6 @@ export async function POST(request: NextRequest) {
 
     const eventCode = eventRow?.event_code ?? "";
     const venueName = (venueRow as { name?: string } | null)?.name ?? "TBA";
-    const eventImageUrl = eventRow?.image_url ?? eventRow?.thumbnail_url ?? null;
 
     const sectionIdsFromSeats = (seatRows ?? []).map((s) => s.event_section_id).filter((id): id is string => !!id);
     const sectionIdsFromItems = sectionItemsRaw.map((i) => i.section_id);
@@ -1014,20 +930,6 @@ export async function POST(request: NextRequest) {
         console.error("[checkout] booking_add_ons insert failed:", baoErr);
       }
     }
-    const addOnSubtotalCents = addOnBookingLinesForDb.reduce(
-      (sum, l) => sum + l.quantity * l.unit_price_cents,
-      0
-    );
-    const addOnsDetails = addOnBookingLinesForDb
-      .map((l) => {
-        const lineTotal = l.quantity * l.unit_price_cents;
-        const lineTotalStr = (lineTotal / 100).toLocaleString("en-PH", {
-          style: "currency",
-          currency: "PHP",
-        });
-        return `<tr style="border-bottom:1px solid #e5e7eb;"><td style="padding:8px 0;">${escapeHtml(l.title || "Add-on")}</td><td style="text-align:right;padding:8px 0;">${l.quantity}</td><td style="text-align:right;padding:8px 0;">${lineTotalStr}</td></tr>`;
-      })
-      .join("");
 
     const seatIds = seatItems.map((i) => i.seat_id);
     if (seatIds.length > 0) {
@@ -1087,182 +989,39 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    if (isOnSitePayment && on_site_payment) {
-      const customerEmail = on_site_payment.customer_email;
-      const customerName = on_site_payment.customer_name;
-      console.log("[checkout] On-site payment, sending ticket email to", customerEmail);
-      const eventDate = eventRow?.event_start
-        ? formatEventDateTimeLong(eventRow.event_start)
-        : "TBA";
-      const ticketDetailsRows: string[] = [];
-      let ticketDetailsSubtotalCents = 0;
-      for (const item of seatItems) {
-        const seatData = seatDataMap.get(item.seat_id);
-        const sectionName = seatData?.sectionName ?? "—";
-        const seatLabel =
-          seatData?.seatingType === "standing"
-            ? "Standing"
-            : seatData?.seatingType === "free"
-              ? "Free Seating"
-              : `Row ${seatData?.rowLabel ?? "-"} Seat ${seatData?.seatNumber ?? "-"}`;
-        const sectionId = seatData?.sectionId ?? null;
-        const priceCents = sectionId ? getPriceForSection(sectionId) : DEFAULT_PRICE_CENTS;
-        ticketDetailsSubtotalCents += priceCents;
-        const priceStr = (priceCents / 100).toLocaleString("en-PH", {
-          style: "currency",
-          currency: "PHP",
-        });
-        ticketDetailsRows.push(
-          `<tr style="border-bottom:1px solid #e5e7eb;"><td style="padding:8px 0;">${escapeHtml(sectionName)}</td><td style="padding:8px 0;">${escapeHtml(seatLabel)}</td><td style="text-align:right;padding:8px 0;">${priceStr}</td></tr>`
-        );
-      }
-      const ticketDetails = ticketDetailsRows.join("");
-      const ticketSubtotalCents =
-        ticketDetailsSubtotalCents > 0
-          ? ticketDetailsSubtotalCents
-          : totalCents + discountCents - addOnSubtotalCents;
-      const subtotalCents = ticketSubtotalCents + addOnSubtotalCents;
-      const attachments = await buildCheckoutEmailAttachmentsParallel(admin, ticketRows);
+    if (!payMongoLink) {
+      console.log("[checkout] immediate confirmation, running confirmBooking", {
+        bookingId: booking.id,
+        isOnSitePayment,
+        usePayMongo,
+      });
       try {
-        await sendTicketEmail({
-          to: customerEmail,
-          eventTitle: eventRow?.title ?? "Event",
-          eventDate,
-          venueName,
-          attachments,
-          buyerName: customerName,
-          ticketDetails,
-          addOnsDetails,
-          subtotalCents,
-          discountCents,
-          totalCents,
-          discountDescription: appliedPromoRows.map((r) => r.code).join(", "),
-          eventImageUrl: eventImageUrl ?? undefined,
-        });
-        await createAdminClient()
-          .from("bookings")
-          .update({ ticket_email_sent_at: new Date().toISOString() })
-          .eq("id", booking.id);
-        console.log("[checkout] on-site ticket email sent successfully");
+        const result = await confirmBooking(admin, booking.id);
+        if (!result.ok && result.errorCode === "missing_destination_email") {
+          console.warn("[checkout] no destination email for ticket delivery");
+          const eventDate = eventRow?.event_start
+            ? formatEventDateTimeLong(eventRow.event_start)
+            : "TBA";
+          await notifyTeamOnSuccessfulSale({
+            admin,
+            eventId: event_id,
+            eventTitle: eventRow?.title ?? "Event",
+            eventDate,
+            venueName,
+            buyerName: "Customer",
+            buyerEmail: undefined,
+            ticketCount: ticketRows.length,
+            totalCents,
+            bookingId: booking.id,
+            enabled:
+              (eventRow as { sale_success_email_enabled?: boolean | null } | null)
+                ?.sale_success_email_enabled === true,
+            createdBy: (eventRow as { created_by?: string | null } | null)?.created_by ?? null,
+          });
+        }
       } catch (err) {
-        console.error("[checkout] failed to send on-site ticket email:", err);
+        console.error("[checkout] confirmBooking failed:", err);
       }
-      await notifyTeamOnSuccessfulSale({
-        admin,
-        eventId: event_id,
-        eventTitle: eventRow?.title ?? "Event",
-        eventDate,
-        venueName,
-        buyerName: customerName,
-        buyerEmail: customerEmail,
-        ticketCount: ticketRows.length,
-        totalCents,
-        bookingId: booking.id,
-        enabled:
-          (eventRow as { sale_success_email_enabled?: boolean | null } | null)
-            ?.sale_success_email_enabled === true,
-        createdBy: (eventRow as { created_by?: string | null } | null)?.created_by ?? null,
-      });
-    } else if (!usePayMongo && user.email) {
-      console.log("[checkout] PayMongo disabled, sending ticket email to", user.email);
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("full_name")
-        .eq("id", user.id)
-        .single();
-      const eventDate = eventRow?.event_start
-        ? formatEventDateTimeLong(eventRow.event_start)
-        : "TBA";
-      const ticketDetailsRows: string[] = [];
-      let ticketDetailsSubtotalCents = 0;
-      for (const item of seatItems) {
-        const seatData = seatDataMap.get(item.seat_id);
-        const sectionName = seatData?.sectionName ?? "—";
-        const seatLabel =
-          seatData?.seatingType === "standing"
-            ? "Standing"
-            : seatData?.seatingType === "free"
-              ? "Free Seating"
-              : `Row ${seatData?.rowLabel ?? "-"} Seat ${seatData?.seatNumber ?? "-"}`;
-        const sectionId = seatData?.sectionId ?? null;
-        const priceCents = sectionId ? getPriceForSection(sectionId) : DEFAULT_PRICE_CENTS;
-        ticketDetailsSubtotalCents += priceCents;
-        const priceStr = (priceCents / 100).toLocaleString("en-PH", {
-          style: "currency",
-          currency: "PHP",
-        });
-        ticketDetailsRows.push(
-          `<tr style="border-bottom:1px solid #e5e7eb;"><td style="padding:8px 0;">${escapeHtml(sectionName)}</td><td style="padding:8px 0;">${escapeHtml(seatLabel)}</td><td style="text-align:right;padding:8px 0;">${priceStr}</td></tr>`
-        );
-      }
-      const ticketDetails = ticketDetailsRows.join("");
-      const ticketSubtotalCents =
-        ticketDetailsSubtotalCents > 0
-          ? ticketDetailsSubtotalCents
-          : totalCents + discountCents - addOnSubtotalCents;
-      const subtotalCents = ticketSubtotalCents + addOnSubtotalCents;
-      const attachments = await buildCheckoutEmailAttachmentsParallel(admin, ticketRows);
-      try {
-        await sendTicketEmail({
-          to: user.email,
-          eventTitle: eventRow?.title ?? "Event",
-          eventDate,
-          venueName,
-          attachments,
-          buyerName: (profile as { full_name?: string } | null)?.full_name ?? "",
-          ticketDetails,
-          addOnsDetails,
-          subtotalCents,
-          discountCents,
-          totalCents,
-          discountDescription: appliedPromoRows.map((r) => r.code).join(", "),
-          eventImageUrl: eventImageUrl ?? undefined,
-        });
-        await createAdminClient()
-          .from("bookings")
-          .update({ ticket_email_sent_at: new Date().toISOString() })
-          .eq("id", booking.id);
-        console.log("[checkout] ticket email sent successfully");
-      } catch (err) {
-        console.error("[checkout] failed to send ticket email:", err);
-      }
-      await notifyTeamOnSuccessfulSale({
-        admin,
-        eventId: event_id,
-        eventTitle: eventRow?.title ?? "Event",
-        eventDate,
-        venueName,
-        buyerName: (profile as { full_name?: string } | null)?.full_name ?? "",
-        buyerEmail: user.email,
-        ticketCount: ticketRows.length,
-        totalCents,
-        bookingId: booking.id,
-        enabled:
-          (eventRow as { sale_success_email_enabled?: boolean | null } | null)
-            ?.sale_success_email_enabled === true,
-        createdBy: (eventRow as { created_by?: string | null } | null)?.created_by ?? null,
-      });
-    } else if (!usePayMongo && !user.email) {
-      console.warn("[checkout] PayMongo disabled but user has no email, skipping ticket email");
-      const eventDate = eventRow?.event_start
-        ? formatEventDateTimeLong(eventRow.event_start)
-        : "TBA";
-      await notifyTeamOnSuccessfulSale({
-        admin,
-        eventId: event_id,
-        eventTitle: eventRow?.title ?? "Event",
-        eventDate,
-        venueName,
-        buyerName: "Customer",
-        buyerEmail: undefined,
-        ticketCount: ticketRows.length,
-        totalCents,
-        bookingId: booking.id,
-        enabled:
-          (eventRow as { sale_success_email_enabled?: boolean | null } | null)
-            ?.sale_success_email_enabled === true,
-        createdBy: (eventRow as { created_by?: string | null } | null)?.created_by ?? null,
-      });
     }
 
     return NextResponse.json({

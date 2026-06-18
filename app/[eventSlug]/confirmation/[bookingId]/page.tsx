@@ -61,7 +61,11 @@ export default async function ConfirmationPage(props: {
       .eq("booking_id", bookingId)
       .single();
     let paidHint: string | undefined;
-    if (payment?.paymongo_id && (await isPaymongoPaid(payment.paymongo_id))) {
+    if (
+      payment?.paymongo_id &&
+      (await isPaymongoPaid(payment.paymongo_id)) &&
+      booking.ticket_email_sent_at == null
+    ) {
       const admin = createAdminClient();
       console.log("[confirmation-page] payment verified via PayMongo, kicking confirmBooking (non-blocking)", {
         bookingId,
@@ -82,20 +86,6 @@ export default async function ConfirmationPage(props: {
     return <ConfirmationProcessingClient bookingId={bookingId} paymentConfirmedHint={paidHint} />;
   }
 
-  // Confirmed: ensure ticket email is sent only when arriving from payment flow (safety net).
-  // When viewing from dashboard ("View tickets"), do NOT send email — only display tickets.
-  if (booking.status === "confirmed" && fromPayment) {
-    const admin = createAdminClient();
-    console.log("[confirmation-page] confirmed booking from payment flow, firing confirmBooking", {
-      bookingId,
-      eventSlug,
-    });
-    // Do not block page render; avoid runtime-specific `after(...)` issues in production.
-    void confirmBooking(admin, bookingId).catch((e) => {
-      console.error("[confirmation-page] confirmBooking failed (from payment)", e);
-    });
-  }
-
   if (booking.status === "failed") {
     // Re-check PayMongo: webhook/status API may have marked failed before paid event
     // arrived (e.g. link.payment.failed before link.payment.paid, or timing).
@@ -104,7 +94,11 @@ export default async function ConfirmationPage(props: {
       .select("paymongo_id")
       .eq("booking_id", bookingId)
       .single();
-    if (payment?.paymongo_id && (await isPaymongoPaid(payment.paymongo_id))) {
+    if (
+      payment?.paymongo_id &&
+      (await isPaymongoPaid(payment.paymongo_id)) &&
+      booking.ticket_email_sent_at == null
+    ) {
       const admin = createAdminClient();
       console.log("[confirmation-page] failed booking but PayMongo reports paid, kicking confirmBooking (non-blocking)", {
         bookingId,
@@ -156,15 +150,22 @@ export default async function ConfirmationPage(props: {
   const needsRecovery =
     booking.status === "confirmed" &&
     tickets.some((t) => !t.ticket_image_url);
-  if (needsRecovery) {
+  const shouldKickConfirmBooking =
+    (fromPayment && booking.ticket_email_sent_at == null) || needsRecovery;
+  if (shouldKickConfirmBooking) {
     const admin = createAdminClient();
-    console.log("[confirmation-page] recovery kick (non-blocking)", {
+    console.log("[confirmation-page] kicking confirmBooking (non-blocking)", {
       bookingId,
+      eventSlug,
+      fromPayment,
       hasEmailSentAt: booking.ticket_email_sent_at != null,
-      missingTicketImages: tickets.filter((t) => !t.ticket_image_url).length,
+      needsRecovery,
+      missingTicketImages: needsRecovery
+        ? tickets.filter((t) => !t.ticket_image_url).length
+        : 0,
     });
     void confirmBooking(admin, bookingId).catch((e) => {
-      console.error("[confirmation-page] confirmBooking failed (recovery)", e);
+      console.error("[confirmation-page] confirmBooking failed", e);
     });
   }
 

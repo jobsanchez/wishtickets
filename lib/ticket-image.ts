@@ -3,7 +3,6 @@ import opentype from "opentype.js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { generateQRBuffer } from "@/lib/qr";
 import { buildEncryptedQrFromQrData } from "@/lib/qr-data";
-import { getSiteOrigin } from "@/lib/site-url";
 import { formatEventDateTimeLong } from "@/lib/event-datetime";
 import { BULK_PRINT_ZIP_MAX_TICKETS_PER_PART } from "@/lib/print-tickets/bulk-zip-email";
 import {
@@ -636,12 +635,25 @@ function scaleLayoutToCanvas(layout: TicketLayoutConfig, width: number, height: 
           ? Math.max(1, Math.round(layout.encryptedQr.height * sy))
           : undefined,
     },
-    website: {
-      ...layout.website,
-      top: Math.round(layout.website.top * sy),
-      left: Math.round(layout.website.left * sx),
-      width: layout.website.width != null ? Math.max(1, Math.round(layout.website.width * sx)) : undefined,
-      height: layout.website.height != null ? Math.max(1, Math.round(layout.website.height * sy)) : undefined,
+    ticketNumber2: {
+      ...layout.ticketNumber2,
+      top: Math.round(layout.ticketNumber2.top * sy),
+      left: Math.round(layout.ticketNumber2.left * sx),
+      width:
+        layout.ticketNumber2.width != null
+          ? Math.max(1, Math.round(layout.ticketNumber2.width * sx))
+          : undefined,
+      height:
+        layout.ticketNumber2.height != null
+          ? Math.max(1, Math.round(layout.ticketNumber2.height * sy))
+          : undefined,
+    },
+    admitOne: {
+      ...layout.admitOne,
+      top: Math.round(layout.admitOne.top * sy),
+      left: Math.round(layout.admitOne.left * sx),
+      width: layout.admitOne.width != null ? Math.max(1, Math.round(layout.admitOne.width * sx)) : undefined,
+      height: layout.admitOne.height != null ? Math.max(1, Math.round(layout.admitOne.height * sy)) : undefined,
     },
     qrSize:
       layout.qrSize != null
@@ -725,8 +737,9 @@ export async function generateAndUploadTicketImage(
     const priceSize = getLayoutSize(layout, "price");
     const qrSize = getLayoutSize(layout, "qr").w;
     const ticketNumSize = getLayoutSize(layout, "ticketNumber");
+    const ticketNum2Size = getLayoutSize(layout, "ticketNumber2");
     const encryptedQrSize = getLayoutSize(layout, "encryptedQr");
-    const websiteSize = getLayoutSize(layout, "website");
+    const admitOneSize = getLayoutSize(layout, "admitOne");
 
     const priceDisplay = params.complementary
       ? (0).toLocaleString("en-PH", { style: "currency", currency: "PHP" })
@@ -834,27 +847,28 @@ export async function generateAndUploadTicketImage(
       </svg>
     `;
 
-    const tw = ticketNumSize.w;
-    const th = ticketNumSize.h;
-    const ticketNumText = `CTRL: ${codeMapping.ctrlText}`.slice(0, 32);
-    const ticketNumWrap = wrapText(ticketNumText, tw - 8, 2, 20);
-    const ticketNumY =
-      th / 2 - (ticketNumWrap.lines.length - 1) * ticketNumWrap.fontSize * 0.6 + ticketNumWrap.fontSize * 0.4;
-
-    const ticketNumPaths = textToPathElements(font, ticketNumWrap.lines, {
-      x: tw / 2,
-      firstLineY: ticketNumY,
-      fontSize: ticketNumWrap.fontSize,
-      align: "center",
-    });
-
-    const ticketNumSvg = `
-      <svg width="${tw}" height="${th}" xmlns="http://www.w3.org/2000/svg">
+    function buildTicketNumberSvg(w: number, h: number): string {
+      const ticketNumText = `CTRL: ${codeMapping.ctrlText}`.slice(0, 32);
+      const ticketNumWrap = wrapText(ticketNumText, w - 8, 2, 20);
+      const ticketNumY =
+        h / 2 - (ticketNumWrap.lines.length - 1) * ticketNumWrap.fontSize * 0.6 + ticketNumWrap.fontSize * 0.4;
+      const ticketNumPaths = textToPathElements(font, ticketNumWrap.lines, {
+        x: w / 2,
+        firstLineY: ticketNumY,
+        fontSize: ticketNumWrap.fontSize,
+        align: "center",
+      });
+      return `
+      <svg width="${w}" height="${h}" xmlns="http://www.w3.org/2000/svg">
         <style>.box { fill: rgba(255,255,255,0.98); stroke: rgba(0,0,0,0.2); stroke-width: 1; }</style>
-        <rect class="box" x="0" y="0" width="${tw}" height="${th}" rx="4"/>
+        <rect class="box" x="0" y="0" width="${w}" height="${h}" rx="4"/>
         ${ticketNumPaths}
       </svg>
     `;
+    }
+
+    const ticketNumSvg = buildTicketNumberSvg(ticketNumSize.w, ticketNumSize.h);
+    const ticketNum2Svg = buildTicketNumberSvg(ticketNum2Size.w, ticketNum2Size.h);
 
     const encryptedQrText = codeMapping.encryptedText.slice(0, 16);
     const eqw = encryptedQrSize.w;
@@ -883,20 +897,20 @@ export async function generateAndUploadTicketImage(
       </svg>
     `;
 
-    const websiteUrl = getSiteOrigin();
-    const websiteW = websiteSize.w;
-    const websiteH = websiteSize.h;
-    const websiteFontSize = 18;
-    const websitePaths = textToPathElements(font, [websiteUrl], {
-      x: websiteW / 2,
-      firstLineY: websiteH / 2 - websiteFontSize * 0.35,
-      fontSize: websiteFontSize,
+    const admitW = admitOneSize.w;
+    const admitH = admitOneSize.h;
+    const admitFontSize = 22;
+    const admitPaths = textToPathElements(font, ["ADMIT ONE"], {
+      x: admitW / 2,
+      firstLineY: admitH / 2 - admitFontSize * 0.35,
+      fontSize: admitFontSize,
       align: "center",
-      fill: "#555",
+      stroke: "#1a1a1a",
+      strokeWidth: 0.5,
     });
-    const websiteSvg = `
-      <svg width="${websiteW}" height="${websiteH}" xmlns="http://www.w3.org/2000/svg">
-        ${websitePaths}
+    const admitOneSvg = `
+      <svg width="${admitW}" height="${admitH}" xmlns="http://www.w3.org/2000/svg">
+        ${admitPaths}
       </svg>
     `;
 
@@ -904,19 +918,20 @@ export async function generateAndUploadTicketImage(
     const sectionBuf = Buffer.from(sectionSvg);
     const priceBuf = Buffer.from(priceSvg);
     const ticketNumBuf = Buffer.from(ticketNumSvg);
+    const ticketNum2Buf = Buffer.from(ticketNum2Svg);
     const encryptedQrBuf = Buffer.from(encryptedQrSvg);
-    const websiteBuf = Buffer.from(websiteSvg);
+    const admitOneBuf = Buffer.from(admitOneSvg);
 
     const pricePos = (layout.price ?? DEFAULT_LAYOUT.price) as RegionPos;
-    const websitePos = (layout.website ?? DEFAULT_LAYOUT.website) as RegionPos;
     const composites: { input: Buffer; top: number; left: number }[] = [
       { input: eventInfoBuf, top: layout.eventInfo.top, left: layout.eventInfo.left },
       { input: sectionBuf, top: layout.section.top, left: layout.section.left },
       { input: priceBuf, top: pricePos.top, left: pricePos.left },
       { input: qrResized, top: layout.qr.top, left: layout.qr.left },
       { input: ticketNumBuf, top: layout.ticketNumber.top, left: layout.ticketNumber.left },
+      { input: ticketNum2Buf, top: layout.ticketNumber2.top, left: layout.ticketNumber2.left },
       { input: encryptedQrBuf, top: layout.encryptedQr.top, left: layout.encryptedQr.left },
-      { input: websiteBuf, top: websitePos.top, left: websitePos.left },
+      { input: admitOneBuf, top: layout.admitOne.top, left: layout.admitOne.left },
     ];
     const output = await base
       .composite(composites)

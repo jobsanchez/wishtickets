@@ -37,20 +37,42 @@ type BuildSeatTicketOpts = {
   recipientName?: string;
   mintContext?: SeatMintContext | null;
   registerUniqueQr?: (base: string) => string;
+  /** When true, inventory must exist (e.g. manual distribution). */
+  requireInventory?: boolean;
+  /** When true, linked inventory must already have a rendered ticket image. */
+  requireInventoryImage?: boolean;
 };
 
 /**
  * Build a buyer ticket row from inventory when available; otherwise mint (legacy fallback).
  */
+function assertInventoryImage(
+  ticketImageUrl: string | null | undefined,
+  requireImage: boolean
+): void {
+  if (!requireImage) return;
+  const url = ticketImageUrl?.trim();
+  if (!url) {
+    throw new TicketInventoryError(
+      "Generate tickets (including images) in Seat Configurator before confirming manual distribution.",
+      "inventory_image_required",
+      400
+    );
+  }
+}
+
 export async function buildSeatSaleTicket(
   admin: AdminSupabaseClient,
   opts: BuildSeatTicketOpts
 ): Promise<SaleTicketRow> {
   const ticketId = randomUUID();
-  const requireInventory = await eventRequiresTicketInventory(admin, opts.eventId);
+  const eventRequiresInventory = await eventRequiresTicketInventory(admin, opts.eventId);
+  const mustUseInventory = opts.requireInventory === true || eventRequiresInventory;
+  const mustHaveImage = opts.requireInventoryImage === true;
   const inventory = await getUnallocatedInventoryForSeat(admin, opts.eventId, opts.seatId);
 
   if (inventory) {
+    assertInventoryImage(inventory.ticket_image_url, mustHaveImage);
     return {
       id: ticketId,
       booking_id: opts.bookingId,
@@ -67,7 +89,7 @@ export async function buildSeatSaleTicket(
     };
   }
 
-  if (requireInventory) {
+  if (mustUseInventory) {
     throw new TicketInventoryError(
       "Generate tickets in Seat Configurator before selling this seat.",
       "inventory_required",
@@ -124,6 +146,8 @@ type BuildSectionTicketOpts = {
   eventCode: string;
   registerUniqueQr?: (base: string) => string;
   recipientName?: string;
+  requireInventory?: boolean;
+  requireInventoryImage?: boolean;
 };
 
 export async function buildSectionSaleTicket(
@@ -131,7 +155,9 @@ export async function buildSectionSaleTicket(
   opts: BuildSectionTicketOpts
 ): Promise<SaleTicketRow> {
   const ticketId = randomUUID();
-  const requireInventory = await eventRequiresTicketInventory(admin, opts.eventId);
+  const eventRequiresInventory = await eventRequiresTicketInventory(admin, opts.eventId);
+  const mustUseInventory = opts.requireInventory === true || eventRequiresInventory;
+  const mustHaveImage = opts.requireInventoryImage === true;
   const inventory = await getNextUnallocatedInventoryForSection(
     admin,
     opts.eventId,
@@ -139,6 +165,7 @@ export async function buildSectionSaleTicket(
   );
 
   if (inventory) {
+    assertInventoryImage(inventory.ticket_image_url, mustHaveImage);
     return {
       id: ticketId,
       booking_id: opts.bookingId,
@@ -155,7 +182,7 @@ export async function buildSectionSaleTicket(
     };
   }
 
-  if (requireInventory) {
+  if (mustUseInventory) {
     throw new TicketInventoryError(
       "Generate tickets in Seat Configurator before selling this section.",
       "inventory_required",
